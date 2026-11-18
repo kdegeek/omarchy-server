@@ -4,6 +4,17 @@ export type Release = {version: string; date: string; title: string; added?: str
 
 export const CHANGELOG: Release[] = [
 	{
+		version: '0.9.39',
+		date: '2026-11-18',
+		title: 'Assistant',
+		added: [
+			'Assistant: ask about this server and your swarm, and have it install, start or update apps, manage machines and change the look. Lookups run straight away; anything that changes something waits for you to tap Approve.',
+			'Sign in with ChatGPT to use your ChatGPT Plus or Pro plan for the assistant, with no API key. Your sign-in stays on the server and only you can use it.',
+			'Or use a Grok or OpenAI API key; the server’s owner can also add a custom endpoint, like a local Ollama.',
+			'Pick a wallpaper and theme together from one card.',
+		],
+	},
+	{
 		version: '0.9.38',
 		date: '2026-11-17',
 		title: 'Finish updates that need the installer',

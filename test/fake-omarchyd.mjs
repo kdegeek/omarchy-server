@@ -242,6 +242,7 @@ export async function startFakeserverd({
 		sharedWith: k.sharedWith,
 		systemDefault: !!k.systemDefault,
 		mine: k.ownerUserId === userId,
+		...(k.provider === 'chatgpt' ? {account: k.account, signedIn: k.signedIn} : {}),
 	})
 	const assistantCanUse = (k, userId) => k.ownerUserId === userId || k.sharedWith.includes(userId) || k.systemDefault
 	const assistantOwned = (id, userId) => assistantChats.find((c) => c.id === String(id ?? '') && c.userId === userId)
@@ -695,6 +696,20 @@ export async function startFakeserverd({
 				return assistantPublic(k, auth.userId)
 			},
 		},
+		// Sign in with ChatGPT, faked: the pasted callback address signs in as chris@example.com.
+		'assistant.chatgptStart': {kind: 'mutation', run: () => ({url: 'https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&state=fake', redirect: 'http://127.0.0.1:1455/auth/callback'})},
+		'assistant.chatgptStatus': {kind: 'query', run: () => ({pending: true})},
+		'assistant.chatgptFinish': {
+			kind: 'mutation',
+			run: (input, auth) => {
+				const u = String(input?.url ?? '')
+				if (!/^http:\/\/127\.0\.0\.1:\d+\/auth\/callback\?.*state=fake/.test(u)) return {error: ['BAD_REQUEST', 'That address is from a different sign-in. Start again.']}
+				const row = {id: 'k_chatgpt', ownerUserId: auth.userId, name: 'ChatGPT', provider: 'chatgpt', baseUrl: 'https://api.openai.com/v1', model: 'gpt-plan', apiKey: '', last4: '', sharedWith: [], systemDefault: false, account: 'chris@example.com', signedIn: true, createdAt: Date.now(), updatedAt: Date.now()}
+				assistantKeys.push(row)
+				return assistantPublic(row, auth.userId)
+			},
+		},
+		'assistant.models': {kind: 'query', run: () => [{id: 'gpt-plan', name: 'GPT Plan'}, {id: 'gpt-plan-mini', name: 'GPT Plan Mini'}]},
 		'assistant.removeKey': {
 			kind: 'mutation',
 			run: (input, auth) => {

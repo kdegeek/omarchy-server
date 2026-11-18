@@ -8132,3 +8132,18 @@ html.page-locked body {
 	font-size: 14px;
 	font-weight: 700;
 }
+
+/* ---- Sign in with ChatGPT ---------------------------------------------------- */
+.chatgpt-signin {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.chatgpt-steps {
+	margin: 0;
+	padding-left: 1.3em;
+	line-height: 1.5;
+}
+.assistant-password {
+	margin: 8px 0 0;
+}

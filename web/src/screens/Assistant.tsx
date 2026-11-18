@@ -125,21 +125,30 @@ function ActionCard({
 	onDecide,
 }: {
 	action: AssistantAction
-	onDecide: (actionId: string, path: 'assistant.approve' | 'assistant.reject', extra?: {id?: string}) => void
+	onDecide: (actionId: string, path: 'assistant.approve' | 'assistant.reject', extra?: {id?: string; password?: string}) => void
 }) {
 	const running = action.status === 'running'
 	const pending = action.status === 'pending' || running
 	const status = statusText(action)
 	const wallpaper = action.toolName === 'omarchy_setBackground'
 	const [chosen, setChosen] = useState(action.picker?.selected ?? '')
+	// A new machine's password is typed here and sent only with Approve: the model and the chat never see it.
+	const vm = action.toolName === 'machines_create'
+	const [password, setPassword] = useState('')
 	return (
 		<div className="assistant-card glass" role="group" aria-label={action.title || 'Approval'}>
 			<b>{action.title || 'Approve this step'}</b>
 			{wallpaper ? null : action.detail ? <p>{action.detail}</p> : null}
 			{wallpaper && pending ? <WallpaperPicker action={action} selected={chosen} disabled={running} onChange={setChosen} /> : null}
+			{vm && action.status === 'pending' ? (
+				<label className="field assistant-password">
+					<span>Password for the machine</span>
+					<input type="password" autoComplete="new-password" value={password} maxLength={256} onChange={(e) => setPassword(e.target.value)} />
+				</label>
+			) : null}
 			{pending ? (
 				<div className="assistant-actions">
-					<button type="button" className="btn primary" disabled={running || (wallpaper && !chosen)} onClick={() => onDecide(action.id, 'assistant.approve', wallpaper ? {id: chosen} : undefined)}>
+					<button type="button" className="btn primary" disabled={running || (wallpaper && !chosen) || (vm && !password)} onClick={() => onDecide(action.id, 'assistant.approve', wallpaper ? {id: chosen} : vm ? {password} : undefined)}>
 						Approve
 					</button>
 					<button type="button" className="btn" disabled={running} onClick={() => onDecide(action.id, 'assistant.reject')}>
@@ -396,7 +405,7 @@ export function Assistant({onClose, onSettings, prefs, setPrefs}: {onClose?: () 
 		}
 	}
 
-	const decide = async (actionId: string, path: 'assistant.approve' | 'assistant.reject', extra?: {id?: string}) => {
+	const decide = async (actionId: string, path: 'assistant.approve' | 'assistant.reject', extra?: {id?: string; password?: string}) => {
 		if (deciding.current.has(actionId)) return
 		const conversationId = conversationIdRef.current
 		if (!conversationId) {
@@ -420,7 +429,7 @@ export function Assistant({onClose, onSettings, prefs, setPrefs}: {onClose?: () 
 		let reloadTheme: string | null = null
 		let reloadAfterRestart = false
 		try {
-			const updated = await mutate<AssistantAction>(path, extra?.id ? {actionId, id: extra.id} : {actionId})
+			const updated = await mutate<AssistantAction>(path, {actionId, ...(extra?.id ? {id: extra.id} : {}), ...(extra?.password ? {password: extra.password} : {})})
 			if (!alive.current || own.signal.aborted) return
 			setItems((bs) =>
 				bs?.map((b) => {
@@ -520,7 +529,7 @@ export function Assistant({onClose, onSettings, prefs, setPrefs}: {onClose?: () 
 						<span className="big">
 							<Icon name="sparkle" size={30} />
 						</span>
-						<b>Add a provider and API key to talk to the assistant.</b>
+						<b>Sign in with ChatGPT or add an API key in Settings to talk to the assistant.</b>
 						{member && <span>Ask the owner to share a key, or add your own.</span>}
 						<button type="button" className="btn primary small" onClick={() => (haptic(6), onSettings())}>
 							Settings → Assistant

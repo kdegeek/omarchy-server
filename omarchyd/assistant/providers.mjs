@@ -204,3 +204,81 @@ export async function* streamChat({baseUrl, apiKey, model, messages, tools, fetc
 		yield {type: 'tool', id: row.id, name: row.name, arguments: args}
 	}
 }
+
+// ---- ChatGPT plan usage: the Responses API -----------------------------------------------------
+// Sign in with ChatGPT supports only POST /v1/responses, with store:false and stream:true. The loop
+// speaks Chat Completions, so its messages and tools are converted here, and the stream comes back
+// as the same {text | tool | error} events. A system message becomes `instructions` (system input
+// items are refused).
+export function responsesInput(messages) {
+	let instructions = ''
+	const input = []
+	for (const m of messages ?? []) {
+		if (!m) continue
+		if (m.role === 'system') instructions += (instructions ? '\n\n' : '') + String(m.content ?? '')
+		else if (m.role === 'user') input.push({role: 'user', content: String(m.content ?? '')})
+		else if (m.role === 'assistant') {
+			if (m.content) input.push({role: 'assistant', content: String(m.content)})
+			for (const t of m.tool_calls ?? []) input.push({type: 'function_call', call_id: t.id, name: t.function?.name, arguments: t.function?.arguments || '{}'})
+		} else if (m.role === 'tool') input.push({type: 'function_call_output', call_id: m.tool_call_id, output: String(m.content ?? '')})
+	}
+	return {instructions, input}
+}
+
+export const responsesTools = (tools) =>
+	(tools ?? []).map((t) => ({type: 'function', name: t.function?.name, description: t.function?.description ?? '', parameters: t.function?.parameters ?? {type: 'object', properties: {}}}))
+
+export async function* streamResponses({accessToken, model, messages, tools, fetchImpl = fetch, signal, baseUrl = 'https://api.openai.com/v1'}) {
+	const {instructions, input} = responsesInput(messages)
+	const res = await fetchImpl(`${baseUrl}/responses`, {
+		method: 'POST',
+		headers: {'content-type': 'application/json', authorization: `Bearer ${accessToken}`, accept: 'text/event-stream'},
+		body: JSON.stringify({model, instructions, input, tools: responsesTools(tools), tool_choice: 'auto', parallel_tool_calls: false, store: false, stream: true}),
+		signal,
+	})
+	if (!res.ok) {
+		let raw = ''
+		try {
+			raw = await res.text()
+		} catch {}
+		yield {type: 'error', message: errorMessage(raw, res.status), status: res.status}
+		return
+	}
+	const decoder = new TextDecoder()
+	let buf = ''
+	let completed = false
+	const handle = function* (event) {
+		const data = event.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n')
+		if (!data || data === '[DONE]') return
+		let ev
+		try {
+			ev = JSON.parse(data)
+		} catch {
+			return
+		}
+		if (ev.type === 'response.output_text.delta' && typeof ev.delta === 'string' && ev.delta) yield {type: 'text', text: ev.delta}
+		else if (ev.type === 'response.output_item.done' && ev.item?.type === 'function_call' && ev.item.name) {
+			yield {type: 'tool', id: ev.item.call_id || ev.item.id || callId(), name: ev.item.name, arguments: ev.item.arguments || '{}'}
+		} else if (ev.type === 'response.completed') completed = true
+		else if (ev.type === 'response.failed' || ev.type === 'response.incomplete' || ev.type === 'error') {
+			completed = true
+			const err = ev.response?.error ?? ev.error ?? ev
+			yield {type: 'error', message: String(err?.message || ev.response?.incomplete_details?.reason || 'ChatGPT didn’t finish the answer'), status: Number(err?.status) || 0}
+		}
+	}
+	if (res.body) {
+		for await (const chunk of res.body) {
+			buf += (typeof chunk === 'string' ? chunk : decoder.decode(chunk, {stream: true})).replace(/\r\n/g, '\n')
+			let idx
+			while ((idx = buf.indexOf('\n\n')) >= 0) {
+				const event = buf.slice(0, idx)
+				buf = buf.slice(idx + 2)
+				yield* handle(event)
+			}
+		}
+	}
+	buf += decoder.decode()
+	if (buf.trim()) yield* handle(buf.replace(/\r\n/g, '\n'))
+	// An interrupted stream is a failure, not an answer.
+	if (!completed && !signal?.aborted) yield {type: 'error', message: 'The answer from ChatGPT was cut off; try again'}
+}

@@ -294,7 +294,7 @@ async function withAssistant(opts = {}) {
 		return null
 	}
 	const asst = createAssistant({dataDir, accounts: fakeAccounts(), now: () => 50, runProcedure, fetchImpl: opts.fetchImpl, mcpTargets: opts.mcpTargets})
-	await asst.keys.add('owner', {name: 'k', provider: 'spacexai', apiKey: 'test-key-1234', model: 'grok-4.7'})
+	await asst.keys.add({userId: 'owner', role: 'owner'}, {name: 'k', provider: 'spacexai', apiKey: 'test-key-1234', model: 'grok-4.7'})
 	return {
 		dataDir,
 		asst,

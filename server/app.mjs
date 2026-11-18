@@ -20,7 +20,7 @@ import {dualProtocolServer, wantsUpgrade} from '../omarchyd/tls.mjs'
 import {createBackendClient, BackendError} from './backend.mjs'
 import {hashId, newSessionId} from './store.mjs'
 
-export const VERSION = '0.9.38'
+export const VERSION = '0.9.39'
 const COOKIE = 'omarchy_server_sid'
 const SESSION_MAX_AGE_S = 60 * 60 * 24 * 365
 const REFRESH_MARGIN_MS = 2 * 60 * 1000
@@ -87,6 +87,10 @@ export const ALLOWED = {
 	'assistant.addKey': 'mutation',
 	'assistant.updateKey': 'mutation',
 	'assistant.removeKey': 'mutation',
+	'assistant.chatgptStart': 'mutation',
+	'assistant.chatgptFinish': 'mutation',
+	'assistant.chatgptStatus': 'query',
+	'assistant.models': 'query',
 	'assistant.conversations': 'query',
 	'assistant.getConversation': 'query',
 	'assistant.deleteConversation': 'mutation',

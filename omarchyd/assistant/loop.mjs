@@ -1,11 +1,12 @@
 import {callMcpTool, forgetMcpTools, listMcpTools} from './mcp.mjs'
-import {streamChat} from './providers.mjs'
+import {streamChat, streamResponses} from './providers.mjs'
 import {filterAppStore, isWriteTool, lookupTool, openAiTools, writeTool} from './tools.mjs'
 
 export const SYSTEM_PROMPT = 'You are the Omarchy Server assistant on this machine and its Local swarm. You do not write programs or propose shell commands. Use only the given tools. Lookups run immediately. Writes become Approve cards the person must approve. Theme colours only: omarchy_setTheme. Wallpaper or theme plus wallpaper: only omarchy_setBackground with the theme slug. Do not call both. Stay on this host.'
 
 const LIMIT = 'I hit the lookup limit for this turn.'
 const KEY_REJECTED = 'That API key was rejected. Replace it in Settings → Assistant.'
+const CHATGPT_REJECTED = 'ChatGPT turned down the request. Sign in with ChatGPT again in Settings → Assistant.'
 const MAX_CALLS = 16
 const MAX_MESSAGES = 40
 
@@ -91,7 +92,7 @@ function cardFor(name, args) {
 		if (a.memoryGb != null && a.memoryGb !== '') bits.push(`${a.memoryGb} GB memory`)
 		if (a.diskSizeGb != null && a.diskSizeGb !== '') bits.push(`${a.diskSizeGb} GB disk`)
 		if (a.username) bits.push(`user ${a.username}`)
-		bits.push('Password will be set when you approve')
+		bits.push('You type its password when you approve')
 		return {title: vm ? `Create VM “${vm}”` : 'Create a virtual machine', detail: bits.join(' · ')}
 	}
 	const id = String(a.id ?? '').trim()
@@ -209,7 +210,7 @@ function watchAbort(signal, pending) {
 	})
 }
 
-export function createLoop({keys, conversations, runProcedure, fetchImpl, mcpTargets, now = () => Date.now()}) {
+export function createLoop({keys, conversations, runProcedure, fetchImpl, mcpTargets, chatgpt = null, now = () => Date.now()}) {
 	const stamp = () => now()
 
 	async function grab(name, auth, input = {}) {
@@ -400,7 +401,7 @@ export function createLoop({keys, conversations, runProcedure, fetchImpl, mcpTar
 			try {
 				key = await keys.resolveForUser(userId, keyId || row?.keyId || undefined)
 			} catch (e) {
-				say('error', {message: e?.message || 'Add an API key in Settings → Assistant, or ask the owner to share one'})
+				say('error', {message: e?.message || 'Sign in with ChatGPT or add an API key in Settings → Assistant (or ask the owner to share one)'})
 				return finish(row?.id)
 			}
 			if (resume && !row) {
@@ -451,15 +452,13 @@ export function createLoop({keys, conversations, runProcedure, fetchImpl, mcpTar
 				const toolCalls = []
 				let providerError = null
 				try {
-					for await (const ev of streamChat({
-						baseUrl: key.baseUrl,
-						apiKey: key.apiKey,
-						model: key.model,
-						messages,
-						tools,
-						fetchImpl,
-						signal,
-					})) {
+					// A ChatGPT sign-in uses the person's plan through the Responses API; everything else
+					// is an OpenAI-style Chat Completions endpoint.
+					const events =
+						key.provider === 'chatgpt'
+							? streamResponses({accessToken: await chatgpt.accessToken(key.id), model: key.model, messages, tools, fetchImpl, signal})
+							: streamChat({baseUrl: key.baseUrl, apiKey: key.apiKey, model: key.model, messages, tools, fetchImpl, signal})
+					for await (const ev of events) {
 						if (signal?.aborted) break
 						if (ev.type === 'text') {
 							text += ev.text
@@ -482,7 +481,7 @@ export function createLoop({keys, conversations, runProcedure, fetchImpl, mcpTar
 				}
 				if (providerError) {
 					await stopped(text)
-					say('error', {message: providerError.status === 401 ? KEY_REJECTED : (providerError.message || 'The assistant did not answer')})
+					say('error', {message: providerError.status === 401 ? (key.provider === 'chatgpt' ? CHATGPT_REJECTED : KEY_REJECTED) : (providerError.message || 'The assistant did not answer')})
 					return finish(row.id)
 				}
 				if (!toolCalls.length) {

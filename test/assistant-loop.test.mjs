@@ -159,7 +159,7 @@ function scripted(responses) {
 async function withAssistant(opts) {
 	const dataDir = await mkdtemp(join(os.tmpdir(), 'al-'))
 	const asst = createAssistant({dataDir, accounts: fakeAccounts(), now: () => 50, ...opts})
-	const key = await asst.keys.add('owner', {name: 'k', provider: 'spacexai', apiKey: SECRET, model: 'grok-4.7'})
+	const key = await asst.keys.add({userId: 'owner', role: 'owner'}, {name: 'k', provider: 'spacexai', apiKey: SECRET, model: 'grok-4.7'})
 	return {
 		dataDir,
 		asst,
@@ -770,7 +770,7 @@ test('a user message while a write is pending keeps a valid tool list', async ()
 		assert.equal(saved.actions[0].status, 'pending')
 		assert.equal(saved.messages.some((m) => m.role === 'tool'), false)
 		assert.equal(calls.some((c) => c.name === 'machines.create'), false)
-		await box.asst.procedures['assistant.approve'].run({actionId: saved.actions[0].id}, {auth: {userId: 'owner'}})
+		await box.asst.procedures['assistant.approve'].run({actionId: saved.actions[0].id, password: 'pick-one'}, {auth: {userId: 'owner'}})
 		assert.equal(calls.filter((c) => c.name === 'machines.create').length, 1)
 		assert.equal((await box.asst.conversations.get('owner', out.conversationId)).actions[0].status, 'done')
 		await box.asst.runTurn({userId: 'owner', role: 'owner', conversationId: out.conversationId, continue: true, emit: () => {}})
@@ -810,7 +810,7 @@ test('overlapping Approves run the RPC once', async () => {
 		const events = []
 		const out = await box.asst.runTurn({userId: 'owner', role: 'owner', message: 'add ubuntu vm', emit: (e) => events.push(e)})
 		const id = events.find((e) => e.event === 'action').data.id
-		const approve = () => box.asst.procedures['assistant.approve'].run({actionId: id}, {auth: {userId: 'owner'}})
+		const approve = () => box.asst.procedures['assistant.approve'].run({actionId: id, password: 'pick-one'}, {auth: {userId: 'owner'}})
 		const first = approve()
 		const second = approve()
 		const settled = Promise.allSettled([first, second])
@@ -852,8 +852,8 @@ test('a write tool becomes pending and Approve runs the RPC once', async () => {
 		assert.equal(actionEv.data.status, 'pending')
 		assert.equal(actionEv.data.kind, 'rpc')
 		assert.equal(actionEv.data.toolName, 'machines_create')
-		assert.match(actionEv.data.detail, /Password will be set when you approve/)
-		assert.equal(JSON.stringify(actionEv.data).includes('password'), false)
+		assert.match(actionEv.data.detail, /You type its password when you approve/)
+		assert.equal(JSON.stringify(actionEv.data).includes('"password"'), false)
 		assert.equal(events.at(-1).event, 'done')
 		assert.equal(calls.some((c) => c.name === 'machines.create'), false)
 		assert.equal(seen.length, 1)
@@ -861,7 +861,10 @@ test('a write tool becomes pending and Approve runs the RPC once', async () => {
 		assert.equal(schema.function.parameters.properties.password, undefined)
 		assert.equal(seen[0].body.tools.some((t) => t.function.name === 'swarm_action'), true)
 		const providerCalls = seen.length
-		await box.asst.procedures['assistant.approve'].run({actionId: actionEv.data.id}, {auth: {userId: 'owner'}})
+		// Approve needs the password typed on the card; without it nothing runs and the step stays open.
+		await assert.rejects(box.asst.procedures['assistant.approve'].run({actionId: actionEv.data.id}, {auth: {userId: 'owner'}}), /Enter a password for the machine/)
+		assert.equal(calls.some((c) => c.name === 'machines.create'), false)
+		await box.asst.procedures['assistant.approve'].run({actionId: actionEv.data.id, password: 'Typed-on-the-card 9'}, {auth: {userId: 'owner'}})
 		assert.equal(seen.length, providerCalls, 'Approve runs the RPC without calling the model')
 		const created = calls.filter((c) => c.name === 'machines.create')
 		assert.equal(created.length, 1)
@@ -871,8 +874,7 @@ test('a write tool becomes pending and Approve runs the RPC once', async () => {
 		assert.equal(created[0].input.memoryGb, 4)
 		assert.equal(created[0].input.diskSizeGb, 32)
 		assert.equal(created[0].input.username, 'chris')
-		assert.equal(created[0].input.password.length, 16)
-		assert.match(created[0].input.password, /^[A-Za-z0-9_-]+$/)
+		assert.equal(created[0].input.password, 'Typed-on-the-card 9')
 		assert.equal(created[0].auth.role, 'owner')
 		const password = created[0].input.password
 		assert.equal(JSON.stringify(events).includes(password), false)
@@ -1131,12 +1133,12 @@ test('a stale save cannot undo Approve', async () => {
 			rpc: {path: 'machines.create', input: {name: 'ubuntu', username: 'chris'}},
 		})
 		const snap = await asst.conversations.get('owner', conv.id)
-		await asst.procedures['assistant.approve'].run({actionId: action.id}, {auth: {userId: 'owner'}})
+		await asst.procedures['assistant.approve'].run({actionId: action.id, password: 'pick-one'}, {auth: {userId: 'owner'}})
 		assert.equal(calls.filter((n) => n === 'machines.create').length, 1)
 		await asst.conversations.saveAction('owner', snap.actions[0])
 		await asst.conversations.append('owner', conv.id, {role: 'tool', toolCallId: 'call_x', name: 'machines_create', content: 'late', at: 9})
 		await assert.rejects(
-			asst.procedures['assistant.approve'].run({actionId: action.id}, {auth: {userId: 'owner'}}),
+			asst.procedures['assistant.approve'].run({actionId: action.id, password: 'pick-one'}, {auth: {userId: 'owner'}}),
 			(e) => e.code === 'CONFLICT' && e.message === 'That step was already handled',
 		)
 		assert.equal(calls.filter((n) => n === 'machines.create').length, 1)
@@ -1203,7 +1205,7 @@ test('aborting a turn stops the tool call so Approve stays done', async () => {
 		turnP = box.asst.runTurn({userId: 'owner', role: 'owner', message: 'how much disk', conversationId: conv.id, signal: ac.signal, emit: () => {}})
 		await started
 		ac.abort()
-		await box.asst.procedures['assistant.approve'].run({actionId: action.id}, {auth: {userId: 'owner'}})
+		await box.asst.procedures['assistant.approve'].run({actionId: action.id, password: 'pick-one'}, {auth: {userId: 'owner'}})
 		const outcome = await Promise.race([turnP.then(() => 'ended', () => 'ended'), new Promise((resolve) => setTimeout(() => resolve('hung'), 400))])
 		assert.equal(outcome, 'ended')
 		assert.equal(toolAborted, true)
@@ -1211,7 +1213,7 @@ test('aborting a turn stops the tool call so Approve stays done', async () => {
 		assert.equal(creates, 1)
 		assert.equal((await box.asst.conversations.get('owner', conv.id)).actions[0].status, 'done')
 		await assert.rejects(
-			box.asst.procedures['assistant.approve'].run({actionId: action.id}, {auth: {userId: 'owner'}}),
+			box.asst.procedures['assistant.approve'].run({actionId: action.id, password: 'pick-one'}, {auth: {userId: 'owner'}}),
 			(e) => e.code === 'CONFLICT',
 		)
 		assert.equal(creates, 1)

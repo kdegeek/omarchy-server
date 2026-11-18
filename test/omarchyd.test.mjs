@@ -43,7 +43,7 @@ describe('omarchyd', () => {
 		const r = await call('query', 'system.version')
 		assert.equal(r.status, 200)
 		const v = r.body.result.data
-		assert.equal(v.version, '0.9.38')
+		assert.equal(v.version, '0.9.39')
 		assert.equal(typeof v.startedAt, 'number')
 		assert.ok(v.startedAt <= Date.now() && Date.now() - v.startedAt < 60_000)
 		assert.match(String(v.revision ?? ''), /^[0-9a-f]{7,40}$/)

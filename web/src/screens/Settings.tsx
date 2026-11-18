@@ -426,8 +426,10 @@ function Field({id, label, hint, ...input}: {id: string; label: string; hint?: s
 }
 
 const PROVIDER_LABEL: Record<AssistantProvider, string> = {
-	spacexai: 'SpaceXAI',
-	'openai-compatible': 'OpenAI-compatible',
+	spacexai: 'Grok (SpaceXAI)',
+	openai: 'OpenAI API',
+	'openai-compatible': 'Custom endpoint',
+	chatgpt: 'ChatGPT plan',
 }
 
 function AssistantPage({onBack}: {onBack: () => void}) {
@@ -440,12 +442,15 @@ function AssistantPage({onBack}: {onBack: () => void}) {
 	const keys = useQ<AssistantKey[]>('assistant.keys')
 	const [add, setAdd] = useState(false)
 	const [share, setShare] = useState<AssistantKey | null>(null)
+	const [signIn, setSignIn] = useState<{keyId?: string} | null>(null)
+	const [modelFor, setModelFor] = useState<AssistantKey | null>(null)
 	const list = keys.data ?? []
 	const remove = async (k: AssistantKey) => {
+		const chat = k.provider === 'chatgpt'
 		const ok = await confirm({
-			title: `Delete ${k.name}?`,
-			body: 'The assistant won’t use this key. Anyone you shared it with loses access.',
-			confirm: 'Delete',
+			title: chat ? 'Sign out of ChatGPT?' : `Delete ${k.name}?`,
+			body: chat ? 'The assistant stops using your ChatGPT plan, and Omarchy Server’s access to it is revoked.' : 'The assistant won’t use this key. Anyone you shared it with loses access.',
+			confirm: chat ? 'Sign out' : 'Delete',
 			danger: true,
 			icon: 'trash',
 		})
@@ -484,10 +489,12 @@ function AssistantPage({onBack}: {onBack: () => void}) {
 					<span className="big">
 						<Icon name="sparkle" size={30} />
 					</span>
-					<b>Add a provider and API key to talk to the assistant.</b>
-					<button className="btn primary small" onClick={() => setAdd(true)}>
-						Add
-					</button>
+					<b>Sign in with ChatGPT, or add an API key, to talk to the assistant.</b>
+				</div>
+			)}
+			{keys.isSuccess && !list.some((k) => k.provider === 'chatgpt' && k.mine) && (
+				<div className="glass group" style={{marginBottom: 14}}>
+					<Row icon="sparkle" color="var(--green)" label="Sign in with ChatGPT" sub="Use your ChatGPT Plus or Pro plan. No API key needed." onClick={() => (haptic(6), setSignIn({}))} />
 				</div>
 			)}
 			{list.map((k) => (
@@ -501,14 +508,18 @@ function AssistantPage({onBack}: {onBack: () => void}) {
 							<Icon name="sparkle" size={19} />
 						</span>
 						<span className="main">
-							<b style={{fontWeight: 550}}>{PROVIDER_LABEL[k.provider]}</b>
+							<b style={{fontWeight: 550}}>{PROVIDER_LABEL[k.provider] ?? k.provider}</b>
 							<span>
-								{k.model}
+								{k.provider === 'chatgpt' ? [k.account, k.model].filter(Boolean).join(' · ') : k.model}
 								{k.last4 ? ` · …${k.last4}` : ''}
 							</span>
 						</span>
 					</div>
-					{k.mine && (
+					{k.provider === 'chatgpt' && k.mine && k.signedIn === false && (
+						<Row icon="alert" color="var(--red)" label="Signed out of ChatGPT" sub="Sign in again to keep using your plan" onClick={() => setSignIn({keyId: k.id})} />
+					)}
+					{k.provider === 'chatgpt' && k.mine && k.signedIn !== false && <Row icon="sparkle" color="var(--accent)" label="Model" value={k.model || 'Choose'} onClick={() => setModelFor(k)} />}
+					{k.mine && k.provider !== 'chatgpt' && (
 						<Row
 							icon="share"
 							color="var(--blue)"
@@ -517,7 +528,7 @@ function AssistantPage({onBack}: {onBack: () => void}) {
 							onClick={() => setShare(k)}
 						/>
 					)}
-					{owner && k.mine && (
+					{owner && k.mine && k.provider !== 'chatgpt' && (
 						<Row
 							icon="star"
 							color="var(--peach)"
@@ -539,22 +550,24 @@ function AssistantPage({onBack}: {onBack: () => void}) {
 							}
 						/>
 					)}
-					{k.mine && <Row icon="trash" color="var(--red)" label="Delete" onClick={() => remove(k)} />}
+					{k.mine && <Row icon="trash" color="var(--red)" label={k.provider === 'chatgpt' ? 'Sign out of ChatGPT' : 'Delete'} onClick={() => remove(k)} />}
 				</Group>
 			))}
 			{!owner && list.length === 0 && keys.isSuccess && (
 				<p className="footer-note" style={{textAlign: 'left', margin: '10px 6px 0'}}>
-					Ask the owner to share a key, or add your own.
+					Sign in with your own ChatGPT, add your own key, or ask the owner to share one.
 				</p>
 			)}
 
-			<AddKeySheet open={add} onClose={() => setAdd(false)} />
+			<AddKeySheet open={add} owner={owner} onClose={() => setAdd(false)} />
+			{signIn && <ChatGptSignInSheet keyId={signIn.keyId} onClose={() => setSignIn(null)} />}
+			{modelFor && <ChatGptModelSheet keyRow={modelFor} onClose={() => setModelFor(null)} />}
 			<ShareKeySheet open={!!share} keyRow={share} accounts={boot.accounts} self={self} onClose={() => setShare(null)} />
 		</div>
 	)
 }
 
-function AddKeySheet({open, onClose}: {open: boolean; onClose: () => void}) {
+function AddKeySheet({open, owner, onClose}: {open: boolean; owner: boolean; onClose: () => void}) {
 	const save = useSave()
 	const [provider, setProvider] = useState<AssistantProvider>('spacexai')
 	const [name, setName] = useState('')
@@ -569,7 +582,7 @@ function AddKeySheet({open, onClose}: {open: boolean; onClose: () => void}) {
 		setBaseUrl('')
 	}, [open])
 	const keyOk = provider === 'openai-compatible' || apiKey.trim().length >= 4
-	const ready = keyOk && !!model.trim() && (provider === 'spacexai' || /^https?:\/\/[^\s]+/i.test(baseUrl.trim()))
+	const ready = keyOk && !!model.trim() && (provider !== 'openai-compatible' || /^https?:\/\/[^\s]+/i.test(baseUrl.trim()))
 	return (
 		<FormSheet
 			open={open}
@@ -604,8 +617,10 @@ function AddKeySheet({open, onClose}: {open: boolean; onClose: () => void}) {
 					if (v === 'openai-compatible' && !baseUrl.trim()) setBaseUrl('http://127.0.0.1:11434/v1')
 				}}
 				options={[
-					{id: 'spacexai', label: 'SpaceXAI'},
-					{id: 'openai-compatible', label: 'OpenAI-compatible'},
+					{id: 'spacexai', label: 'Grok'},
+					{id: 'openai', label: 'OpenAI'},
+					// A custom address makes the server send requests anywhere it can reach: owner only.
+					...(owner ? [{id: 'openai-compatible' as const, label: 'Custom'}] : []),
 				]}
 			/>
 			<Field id="ask-name" label="Name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
@@ -614,7 +629,7 @@ function AddKeySheet({open, onClose}: {open: boolean; onClose: () => void}) {
 				label="Model"
 				value={model}
 				onChange={(e) => setModel(e.target.value)}
-				placeholder={provider === 'spacexai' ? 'grok-4.7' : 'llama3.2'}
+				placeholder={provider === 'spacexai' ? 'grok-4.7' : provider === 'openai' ? 'gpt-5.5' : 'llama3.2'}
 				hint={provider === 'openai-compatible' ? 'Must match a model id the endpoint serves.' : undefined}
 				autoCapitalize="off"
 				autoCorrect="off"
@@ -1070,5 +1085,152 @@ function SecurityGroup() {
 			<Row icon="key" color="var(--blue)" label="Always use the secure address" trailing={<Switch on={!!s?.alwaysHttps} disabled={!s} label="Always use the secure address" onChange={(v) => set({alwaysHttps: v}, v ? 'Pages now open over https://' : 'http:// pages allowed again')} />} />
 			<Row icon="clock" color="var(--peach)" label="Lock after viewing remotely" trailing={<Switch on={s?.lockAfterRemote !== false} disabled={!s} label="Lock after viewing remotely" onChange={(v) => set({lockAfterRemote: v}, v ? 'The screen locks after remote viewing' : 'The screen stays signed in')} />} />
 		</Group>
+	)
+}
+
+// Sign in with ChatGPT. OpenAI sends the browser back to http://127.0.0.1:<port>/auth/callback.
+// On this server's own browser, omarchyd catches that by itself; anywhere else that page won't load,
+// and its address is pasted here. The tokens stay on the server.
+function ChatGptSignInSheet({keyId, onClose}: {keyId?: string; onClose: () => void}) {
+	const qc = useQueryClient()
+	const toast = useToast()
+	const [url, setUrl] = useState<string | null>(null)
+	const [pasted, setPasted] = useState('')
+	const [error, setError] = useState<string | null>(null)
+	const [busy, setBusy] = useState(false)
+	const done = (k: AssistantKey) => {
+		void qc.invalidateQueries({queryKey: ['assistant.keys']})
+		toast(k.account ? `Signed in as ${k.account}` : 'Signed in to ChatGPT')
+		onClose()
+	}
+	const status = useQuery({
+		queryKey: ['assistant.chatgptStatus'],
+		queryFn: () => query<{pending: boolean; key?: AssistantKey}>('assistant.chatgptStatus'),
+		enabled: !!url,
+		refetchInterval: 2000,
+		gcTime: 0,
+	})
+	useEffect(() => {
+		if (status.data?.key) done(status.data.key)
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [status.data?.key])
+	const open = async () => {
+		haptic(6)
+		setError(null)
+		// Opened in the tap, so it isn't blocked as a pop-up; pointed at ChatGPT once the address is ready.
+		const tab = window.open('about:blank', '_blank')
+		try {
+			const r = await mutate<{url: string}>('assistant.chatgptStart', keyId ? {keyId} : {})
+			setUrl(r.url)
+			if (tab) tab.location.href = r.url
+		} catch (e) {
+			tab?.close()
+			setError((e as Error).message)
+		}
+	}
+	const finish = async (e: FormEvent) => {
+		e.preventDefault()
+		setBusy(true)
+		setError(null)
+		try {
+			done(await mutate<AssistantKey>('assistant.chatgptFinish', {url: pasted.trim()}))
+		} catch (err) {
+			setError((err as Error).message)
+		} finally {
+			setBusy(false)
+		}
+	}
+	return (
+		<Sheet open onClose={onClose} label="Sign in with ChatGPT">
+			<SheetHeader
+				icon={
+					<span className="sheet-icon" style={{background: 'linear-gradient(135deg, var(--green), var(--accent))'}}>
+						<Icon name="sparkle" size={28} />
+					</span>
+				}
+				title="Sign in with ChatGPT"
+				subtitle="The assistant uses your ChatGPT Plus or Pro plan"
+				onClose={onClose}
+			/>
+			<form className="screen chatgpt-signin" onSubmit={finish}>
+				<ol className="chatgpt-steps">
+					<li>Open ChatGPT, sign in, and allow Omarchy Server to use your plan.</li>
+					<li>On this server’s own browser, that’s it: this finishes by itself.</li>
+					<li>Anywhere else, you’ll land on a page that won’t load. Copy its whole address and paste it below.</li>
+				</ol>
+				<button type="button" className="btn primary block" onClick={open}>
+					<Icon name="sparkle" size={18} /> {url ? 'Open ChatGPT again' : 'Open ChatGPT'}
+				</button>
+				{url && (
+					<p className="muted" style={{fontSize: '0.85em', margin: 0}}>
+						Didn’t open?{' '}
+						<a href={url} target="_blank" rel="noreferrer">
+							Open the sign-in page
+						</a>
+						.
+					</p>
+				)}
+				{url && (
+					<>
+						<Field
+							id="chatgpt-callback"
+							label="Address of the page that didn’t load"
+							value={pasted}
+							onChange={(e) => setPasted(e.target.value)}
+							placeholder="http://127.0.0.1:1455/auth/callback?code=…"
+							autoCapitalize="off"
+							autoCorrect="off"
+							spellCheck={false}
+							inputMode="url"
+						/>
+						<button className="btn block" type="submit" disabled={busy || !/^http:\/\/127\.0\.0\.1:\d+\/auth\/callback\?/.test(pasted.trim())}>
+							{busy ? <span className="spinner" /> : 'Finish signing in'}
+						</button>
+					</>
+				)}
+				{error && (
+					<div className="error">
+						<Icon name="alert" size={18} />
+						{error}
+					</div>
+				)}
+				<p className="footer-note" style={{textAlign: 'left', margin: 0}}>
+					Your ChatGPT sign-in stays on this server, only for you. Omarchy Server can use your plan for the assistant; it can’t see your ChatGPT chats.
+				</p>
+			</form>
+		</Sheet>
+	)
+}
+
+function ChatGptModelSheet({keyRow, onClose}: {keyRow: AssistantKey; onClose: () => void}) {
+	const save = useSave()
+	const models = useQuery({queryKey: ['assistant.models', keyRow.id], queryFn: () => query<{id: string; name: string}[]>('assistant.models', {id: keyRow.id}), retry: false})
+	return (
+		<Sheet open onClose={onClose} label="Model">
+			<SheetHeader title="Model" subtitle="Models your ChatGPT plan can use" onClose={onClose} />
+			<div className="screen">
+				{models.isLoading && <span className="spinner" />}
+				{models.error && (
+					<div className="error">
+						<Icon name="alert" size={18} />
+						{(models.error as Error).message}
+					</div>
+				)}
+				{models.data && (
+					<div className="glass group">
+						{models.data.map((m) => (
+							<Row
+								key={m.id}
+								icon={m.id === keyRow.model ? 'check' : 'sparkle'}
+								color={m.id === keyRow.model ? 'var(--green)' : 'var(--accent)'}
+								label={m.name}
+								value={m.id === keyRow.model ? 'In use' : undefined}
+								onClick={() => save.mutate({path: 'assistant.updateKey', input: {id: keyRow.id, model: m.id}, done: `Using ${m.name}`, refresh: ['assistant.keys']}, {onSuccess: onClose})}
+							/>
+						))}
+					</div>
+				)}
+			</div>
+		</Sheet>
 	)
 }

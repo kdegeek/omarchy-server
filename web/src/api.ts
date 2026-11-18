@@ -237,7 +237,7 @@ export type ActiveSession = {
 	client: {type: 'native'; id?: string; platform?: string; deviceClass?: string; appVersion?: string} | {type: 'browser'; userAgent?: string}
 }
 
-export type AssistantProvider = 'spacexai' | 'openai-compatible'
+export type AssistantProvider = 'spacexai' | 'openai' | 'openai-compatible' | 'chatgpt'
 export type AssistantKey = {
 	id: string
 	name: string
@@ -249,6 +249,9 @@ export type AssistantKey = {
 	sharedWith: string[]
 	systemDefault: boolean
 	mine: boolean
+	// Sign in with ChatGPT: the ChatGPT account, and whether it's still signed in.
+	account?: string | null
+	signedIn?: boolean
 }
 
 // Public card. The chat shows these fields only — never rpc input, passwords, apiKey, or credentials.

@@ -14,7 +14,7 @@ test('addKey stores the secret on disk and listPublic never returns it', async (
 	const dataDir = await tmp()
 	try {
 		const keys = createKeyStore({dataDir, now: () => 1_700_000_000_000})
-		const row = await keys.add('owner', {name: 'My xAI', provider: 'spacexai', apiKey: 'xai-secret-abcd', model: 'grok-4.7'})
+		const row = await keys.add({userId: 'owner', role: 'owner'}, {name: 'My xAI', provider: 'spacexai', apiKey: 'xai-secret-abcd', model: 'grok-4.7'})
 		assert.equal(row.provider, 'spacexai')
 		assert.equal(row.baseUrl, 'https://api.x.ai/v1')
 		assert.equal(row.last4, 'abcd')
@@ -36,7 +36,7 @@ test('openai-compatible accepts an empty API key', async () => {
 	const dataDir = await tmp()
 	try {
 		const keys = createKeyStore({dataDir})
-		const row = await keys.add('owner', {
+		const row = await keys.add({userId: 'owner', role: 'owner'}, {
 			name: 'Local Ollama',
 			provider: 'openai-compatible',
 			apiKey: '',
@@ -48,7 +48,7 @@ test('openai-compatible accepts an empty API key', async () => {
 		const raw = JSON.parse(await readFile(join(dataDir, 'assistant', 'keys.json'), 'utf8'))
 		assert.equal(raw.keys[0].apiKey, '')
 		await assert.rejects(
-			() => keys.add('owner', {name: 'x', provider: 'spacexai', apiKey: '', model: 'grok-4.7'}),
+			() => keys.add({userId: 'owner', role: 'owner'}, {name: 'x', provider: 'spacexai', apiKey: '', model: 'grok-4.7'}),
 			/API key/,
 		)
 	} finally {
@@ -60,7 +60,7 @@ test('openai-compatible adds /v1 when the base URL has no path', async () => {
 	const dataDir = await tmp()
 	try {
 		const keys = createKeyStore({dataDir})
-		const row = await keys.add('owner', {
+		const row = await keys.add({userId: 'owner', role: 'owner'}, {
 			name: 'Local Ollama',
 			provider: 'openai-compatible',
 			apiKey: 'ollama',
@@ -68,7 +68,7 @@ test('openai-compatible adds /v1 when the base URL has no path', async () => {
 			baseUrl: 'http://127.0.0.1:11434',
 		})
 		assert.equal(row.baseUrl, 'http://127.0.0.1:11434/v1')
-		const already = await keys.add('owner', {
+		const already = await keys.add({userId: 'owner', role: 'owner'}, {
 			name: 'with v1',
 			provider: 'openai-compatible',
 			apiKey: 'ollama',
@@ -85,7 +85,7 @@ test('a member cannot use or list a key until it is shared or default', async ()
 	const dataDir = await tmp()
 	try {
 		const keys = createKeyStore({dataDir})
-		const row = await keys.add('owner', {name: 'k', provider: 'spacexai', apiKey: 'secret-key-1', model: 'grok-4.7'})
+		const row = await keys.add({userId: 'owner', role: 'owner'}, {name: 'k', provider: 'spacexai', apiKey: 'secret-key-1', model: 'grok-4.7'})
 		assert.deepEqual(await keys.listPublic('sam'), [])
 		await assert.rejects(() => keys.resolveForUser('sam', row.id), /isn.t/)
 		await keys.update({userId: 'owner', role: 'owner'}, {id: row.id, sharedWith: ['sam']})
@@ -100,12 +100,15 @@ test('only the server owner can set systemDefault, and only on a key they own', 
 	const dataDir = await tmp()
 	try {
 		const keys = createKeyStore({dataDir})
-		const a = await keys.add('owner', {name: 'a', provider: 'spacexai', apiKey: 'aaaa', model: 'grok-4.7'})
-		const b = await keys.add('sam', {name: 'b', provider: 'openai-compatible', apiKey: 'bbbb', model: 'llama', baseUrl: 'http://127.0.0.1:11434/v1'})
+		const a = await keys.add({userId: 'owner', role: 'owner'}, {name: 'a', provider: 'spacexai', apiKey: 'aaaa', model: 'grok-4.7'})
+		// A member can't point omarchyd at an arbitrary address, but can add a key for a known provider.
+		await assert.rejects(() => keys.add({userId: 'sam', role: 'member'}, {name: 'b', provider: 'openai-compatible', apiKey: 'bbbb', model: 'llama', baseUrl: 'http://192.168.1.1/v1'}), /Only the server’s owner can add a custom endpoint/)
+		const b = await keys.add({userId: 'sam', role: 'member'}, {name: 'b', provider: 'openai', apiKey: 'bbbb', model: 'gpt-x'})
+		assert.equal(b.baseUrl, 'https://api.openai.com/v1')
 		await assert.rejects(() => keys.update({userId: 'sam', role: 'member'}, {id: b.id, systemDefault: true}), /owner/)
 		await keys.update({userId: 'owner', role: 'owner'}, {id: a.id, systemDefault: true})
 		await assert.rejects(() => keys.update({userId: 'owner', role: 'owner'}, {id: b.id, systemDefault: true}), /own/)
-		const second = await keys.add('owner', {name: 'c', provider: 'spacexai', apiKey: 'cccc', model: 'grok-4.7'})
+		const second = await keys.add({userId: 'owner', role: 'owner'}, {name: 'c', provider: 'spacexai', apiKey: 'cccc', model: 'grok-4.7'})
 		await keys.update({userId: 'owner', role: 'owner'}, {id: second.id, systemDefault: true})
 		const listed = await keys.listPublic('owner')
 		assert.equal(listed.find((k) => k.id === a.id).systemDefault, false)
@@ -147,5 +150,28 @@ test('assistant key RPCs: member cannot set default; secret stays off the wire',
 		}
 	} finally {
 		await rm(root, {recursive: true, force: true})
+	}
+})
+
+test('a ChatGPT sign-in is personal: never shared, never the default, and signing in again updates it', async () => {
+	const dataDir = await tmp()
+	try {
+		const keys = createKeyStore({dataDir})
+		const tokens = {sub: 'acct-1', email: 'chris@example.com', clientId: 'oaiapp_1', accessToken: 'at-1', refreshToken: 'rt-1', idToken: 'id-1', expiresAt: 1, scope: 'chatgpt.tokens.use.direct', model: 'gpt-x'}
+		const row = await keys.saveChatGpt('owner', tokens)
+		assert.equal(row.provider, 'chatgpt')
+		assert.equal(row.account, 'chris@example.com')
+		assert.equal(JSON.stringify(row).includes('rt-1'), false, 'tokens never leave omarchyd')
+		assert.equal(JSON.stringify(row).includes('at-1'), false)
+		await assert.rejects(() => keys.update({userId: 'owner', role: 'owner'}, {id: row.id, sharedWith: ['sam']}), /only for the person who signed in/)
+		await assert.rejects(() => keys.update({userId: 'owner', role: 'owner'}, {id: row.id, systemDefault: true}), /only for the person who signed in/)
+		assert.deepEqual(await keys.listPublic('sam'), [])
+		await assert.rejects(() => keys.resolveForUser('sam', row.id), /isn’t available/)
+		const again = await keys.saveChatGpt('owner', {...tokens, refreshToken: 'rt-2'})
+		assert.equal(again.id, row.id)
+		assert.equal((await keys.getSecret(row.id)).chatgpt.refreshToken, 'rt-2')
+		assert.equal((await keys.listPublic('owner')).length, 1)
+	} finally {
+		await rm(dataDir, {recursive: true, force: true})
 	}
 })
