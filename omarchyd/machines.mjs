@@ -290,9 +290,19 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			let disks = 0
 			let cds = 0
 			for (const d of m.layout.disks) {
+				if (d.role === 'seed' && !m.cloudInit) {
+					if (/^omarchy/i.test(m.osId ?? '')) d.role = 'installer'
+					else m.cloudInit = {username: '', hostname: hostnameFor(m.name, m.id), sshKeys: []}
+					continue
+				}
 				if (d.id) continue
-				if (/seed\.iso$/.test(d.file)) Object.assign(d, {id: 'seed', role: 'seed'})
-				else if (/answer\.iso$/.test(d.file)) Object.assign(d, {id: 'answer', role: 'answer'})
+				if (/seed\.iso$/.test(d.file)) {
+					if (!m.cloudInit && /^omarchy/i.test(m.osId ?? '')) Object.assign(d, {id: 'seed', role: 'installer'})
+					else {
+						Object.assign(d, {id: 'seed', role: 'seed'})
+						m.cloudInit ??= {username: '', hostname: hostnameFor(m.name, m.id), sshKeys: []}
+					}
+				} else if (/answer\.iso$/.test(d.file)) Object.assign(d, {id: 'answer', role: 'answer'})
 				else d.id = d.device === 'cdrom' ? `cd${cds++}` : `disk${disks++}`
 			}
 			if (!m.boot) {
@@ -559,7 +569,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 						'user_configuration.json': JSON.stringify(omarchyConfiguration({host, diskSizeGb})),
 						'user_credentials.json': JSON.stringify(omarchyCredentials({username, hash})),
 					})
-					m.layout.disks.push({id: 'seed', role: 'seed', file: seedIso, device: 'cdrom', bus: 'sata', format: 'raw'})
+					m.layout.disks.push({id: 'seed', role: 'installer', file: seedIso, device: 'cdrom', bus: 'sata', format: 'raw'})
 				} else if (kind === 'windows') {
 					const answer = await mediaIso(m, 'answer', 'OMARCHY_ANSWER', {'autounattend.xml': windowsAnswerFile({computerName: host.toUpperCase(), username, password})})
 					m.layout.disks.push({id: 'answer', role: 'answer', file: answer, device: 'cdrom', bus: 'sata', format: 'raw'})
@@ -1004,7 +1014,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 				bootMenu: !!m.options?.bootMenu,
 				notes: m.options?.notes ?? '',
 			},
-			cloudInit: m.layout?.disks?.some((d) => d.role === 'seed') ? {username: m.cloudInit?.username ?? '', hostname: m.cloudInit?.hostname ?? hostnameFor(m.name, m.id), sshKeys: m.cloudInit?.sshKeys ?? []} : null,
+			cloudInit: m.cloudInit && m.layout?.disks?.some((d) => d.role === 'seed') ? {username: m.cloudInit.username ?? '', hostname: m.cloudInit.hostname ?? hostnameFor(m.name, m.id), sshKeys: m.cloudInit.sshKeys ?? []} : null,
 			portForwards: m.portForwards ?? [],
 			snapshots: m.snapshots ?? [],
 			tasks: (m.tasks ?? []).slice(0, 50),
@@ -1233,7 +1243,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		await ready
 		const m = find(input.id)
 		writable(m)
-		const seedDisk = m.layout.disks.find((d) => d.role === 'seed')
+		const seedDisk = m.cloudInit ? m.layout.disks.find((d) => d.role === 'seed') : null
 		if (!seedDisk) throw new RpcError('PRECONDITION_FAILED', `${m.name} doesn’t use cloud-init`)
 		const username = String(input.username ?? m.cloudInit?.username ?? '').trim()
 		if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(username) || username === 'root') throw new RpcError('BAD_REQUEST', 'Use a lower-case username: letters, numbers, - and _ (not root)')
@@ -1467,7 +1477,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 						const dst = join(dir, d.id === 'disk0' ? 'disk.qcow2' : `${d.id}.qcow2`)
 						await copyDisk(d, dst)
 						kept.push({...d, file: dst})
-					} else if (d.role === 'answer') continue
+					} else if (d.role === 'answer' || d.role === 'installer') continue
 					else if (d.role === 'seed') {
 						const src = d.file
 						if (src && (await exists(src))) {

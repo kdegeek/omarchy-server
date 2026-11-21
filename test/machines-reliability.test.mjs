@@ -162,4 +162,99 @@ test('#315: deleteSnapshot propagates qemu-img failures and only ignores missing
 	assert.equal(afterRetry.tasks[0].status, 'ok')
 })
 
+test('#317: Omarchy installer machines do not expose Cloud-Init and updateCloudInit refuses them', async (t) => {
+	const omId = '11112222'
+	const cloudId = '33334444'
+	const xorrisoCalls = []
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd === 'virsh' && args.includes('list')) return ' Id   Name   State\n------------------\n'
+			if (cmd === 'xorriso') {
+				xorrisoCalls.push(args)
+				await writeFile(args[args.indexOf('-output') + 1], 'iso')
+			}
+			return ''
+		},
+	})
+	const omDir = join(env.dataDir, 'machines', 'vms', omId)
+	const cloudDir = join(env.dataDir, 'machines', 'vms', cloudId)
+	await mkdir(omDir, {recursive: true})
+	await mkdir(cloudDir, {recursive: true})
+	await writeFile(join(omDir, 'disk.qcow2'), 'om-disk')
+	await writeFile(join(cloudDir, 'disk.qcow2'), 'cl-disk')
+
+	const legacyCloudId = '55556666'
+	const legacyDir = join(env.dataDir, 'machines', 'vms', legacyCloudId)
+	await mkdir(legacyDir, {recursive: true})
+	await writeFile(join(legacyDir, 'disk.qcow2'), 'lg-disk')
+	const legacyCloudRec = makeMachineRecord(env.dataDir, {
+		id: legacyCloudId,
+		vmid: 102,
+		name: 'LegacyUbuntu',
+		osId: 'ubuntu-24.04-amd64',
+		layout: {
+			firmware: 'efi',
+			machineType: 'q35',
+			nic: 'virtio',
+			video: 'vga',
+			disks: [
+				{id: 'disk0', file: join(legacyDir, 'disk.qcow2'), device: 'disk', bus: 'virtio', format: 'qcow2', sizeGb: 40},
+				{id: 'seed', role: 'seed', file: join(legacyDir, 'seed.iso'), device: 'cdrom', bus: 'sata', format: 'raw'},
+			],
+		},
+	})
+	delete legacyCloudRec.cloudInit
+	const omRec = makeMachineRecord(env.dataDir, {
+		id: omId,
+		vmid: 100,
+		name: 'OmarchyVM',
+		osId: 'omarchy-4.0.4-amd64',
+		cloudInit: undefined,
+		boot: ['disk0', 'cd0'],
+		layout: {
+			firmware: 'efi',
+			machineType: 'q35',
+			nic: 'virtio',
+			video: 'vga',
+			disks: [
+				{id: 'disk0', file: join(omDir, 'disk.qcow2'), device: 'disk', bus: 'virtio', format: 'qcow2', sizeGb: 40},
+				{id: 'cd0', file: join(env.dataDir, 'machines/images/omarchy-4.0.4-amd64.iso'), device: 'cdrom', bus: 'sata', format: 'raw'},
+				{id: 'seed', role: 'seed', file: join(omDir, 'seed.iso'), device: 'cdrom', bus: 'sata', format: 'raw'},
+			],
+		},
+	})
+	delete omRec.cloudInit
+	const cloudRec = makeMachineRecord(env.dataDir, {id: cloudId, vmid: 101, name: 'CloudVM'})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [omRec, cloudRec, legacyCloudRec]}))
+
+	const m = env.open()
+	await m.ready
+
+	const omDetails = await m.procedures['machines.details'].run({id: omId})
+	assert.equal(omDetails.cloudInit, null)
+	assert.equal(omDetails.hardware.disks.find((d) => d.id === 'seed').role, 'installer')
+
+	await assert.rejects(
+		() => m.procedures['machines.updateCloudInit'].run({id: omId, username: 'chris'}),
+		(err) => err instanceof RpcError && err.code === 'PRECONDITION_FAILED' && /doesn’t use cloud-init/.test(err.message),
+	)
+	assert.equal(xorrisoCalls.length, 0, 'xorriso must not overwrite Omarchy installer seed.iso')
+
+	const cloudDetails = await m.procedures['machines.details'].run({id: cloudId})
+	assert.equal(cloudDetails.cloudInit.username, 'chris')
+	assert.equal(await m.procedures['machines.updateCloudInit'].run({id: cloudId, username: 'alex'}), true)
+	assert.equal(xorrisoCalls.length, 1)
+
+	const legacyDetails = await m.procedures['machines.details'].run({id: legacyCloudId})
+	assert.ok(legacyDetails.cloudInit, 'pre-0.9.0 cloud-init VM without cloudInit field should keep cloud-init')
+	assert.equal(legacyDetails.hardware.disks.find((d) => d.id === 'seed').role, 'seed')
+
+	const apiSrc = await readFile(new URL('../web/src/machines/api.ts', import.meta.url), 'utf8')
+	assert.match(apiSrc, /role:\s*'seed'\s*\|\s*'answer'\s*\|\s*'installer'\s*\|\s*null/)
+	assert.match(apiSrc, /driveName[\s\S]*'installer'[\s\S]*'Installer configuration'/)
+	const panelsSrc = await readFile(new URL('../web/src/machines/panels.tsx', import.meta.url), 'utf8')
+	assert.match(panelsSrc, /drive\.role === 'installer'/)
+})
+
+
 

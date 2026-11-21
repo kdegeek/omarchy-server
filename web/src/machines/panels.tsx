@@ -525,7 +525,9 @@ function DriveEdit({d, drive, onDone}: {d: MachineDetails; drive: Drive; onDone:
 						? 'Holds cloud-init’s setup for this machine (edit it under Cloud-Init).'
 						: drive.role === 'answer'
 							? 'Windows Setup’s answer file; removed automatically after the first shutdown.'
-							: `Currently: ${drive.media ?? 'empty'}. Put in one of the .iso files from your Home folder, or a downloaded installer.`}
+							: drive.role === 'installer'
+								? 'Holds the Omarchy installer’s setup for this machine.'
+								: `Currently: ${drive.media ?? 'empty'}. Put in one of the .iso files from your Home folder, or a downloaded installer.`}
 				</p>
 				{!drive.role && (
 					<>

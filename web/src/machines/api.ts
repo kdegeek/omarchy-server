@@ -10,7 +10,7 @@ export type Drive = {
 	bus: 'virtio' | 'sata' | 'scsi' | 'ide'
 	target: string
 	format: string
-	role: 'seed' | 'answer' | null
+	role: 'seed' | 'answer' | 'installer' | null
 	cache: string
 	discard?: boolean
 	sizeGb: number | null
@@ -129,4 +129,4 @@ export const CACHE_LABEL: Record<string, string> = {default: 'Default (no cache)
 export const mib = (mb: number) => (mb >= 1024 ? `${Math.round((mb / 1024) * 100) / 100} GiB` : `${mb} MiB`)
 export const rate = (bps: number) => (bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MB/s` : bps >= 1e3 ? `${(bps / 1e3).toFixed(1)} kB/s` : `${Math.round(bps)} B/s`)
 export const when = (t?: number) => (t ? new Date(t).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '–')
-export const driveName = (d: Drive) => (d.role === 'seed' ? 'Cloud-init drive' : d.role === 'answer' ? 'Windows answer file' : d.device === 'cdrom' ? `CD/DVD drive (${d.target})` : `Hard disk (${d.target})`)
+export const driveName = (d: Drive) => (d.role === 'seed' ? 'Cloud-init drive' : d.role === 'answer' ? 'Windows answer file' : d.role === 'installer' ? 'Installer configuration' : d.device === 'cdrom' ? `CD/DVD drive (${d.target})` : `Hard disk (${d.target})`)
