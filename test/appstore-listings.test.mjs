@@ -46,3 +46,30 @@ test('string dependencies or gallery in one listing do not hide its store', asyn
 	const detail = await apps.procedures['appStore.app'].run({appId: 'bad-gallery'})
 	assert.deepEqual(detail.gallery, [])
 })
+
+test('store manifest YAML syntax error falls back to repository name instead of hiding the store', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'appstore-listings-680-')))
+	t.after(() => rm(root, {recursive: true, force: true}))
+
+	const store = await initStore(root, 'my-cool-store', [
+		{folder: 'one', yml: 'manifestVersion: 1\nid: one\nname: One\nport: 31001\n'},
+		{folder: 'two', yml: 'manifestVersion: 1\nid: two\nname: Two\nport: 31002\n'},
+	])
+	const run = async (cmd, args, opts = {}) => (cmd === 'git' ? execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString() : '')
+	const apps = createApps({dataDir: join(root, 'data'), home: join(root, 'home'), allowFileStores: true, defaultStores: [{url: store.url}], systemApps: null, run})
+	t.after(() => apps.close())
+
+	const first = await apps.procedures['appStore.registry'].run()
+	assert.deepEqual(first[0].apps.map((a) => a.id).sort(), ['one', 'two'])
+
+	await writeFile(join(store.work, 'omarchy-app-store.yml'), 'id: x\nname: [unclosed\n')
+	git(store.work, 'add', '-A')
+	git(store.work, 'commit', '-qm', 'break store manifest')
+	git(store.work, 'push', '-q', 'origin', 'HEAD:main')
+
+	await apps.procedures['appStore.refresh'].run()
+	const reg = await apps.procedures['appStore.registry'].run()
+	assert.equal(reg.length, 1)
+	assert.equal(reg[0].meta.name, 'My Cool Store')
+	assert.deepEqual(reg[0].apps.map((a) => a.id).sort(), ['one', 'two'])
+})

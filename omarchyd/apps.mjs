@@ -939,7 +939,8 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 	}
 	async function loadStore(url) {
 		const dir = storeDir(url)
-		let meta = (await readYaml(dir, STORE_FILES))?.data
+		let meta = (await readYaml(dir, STORE_FILES).catch(() => null))?.data
+		if (!meta || typeof meta !== 'object' || Array.isArray(meta)) meta = null
 		const gallery = GALLERIES[url.toLowerCase().replace(/\.git$/, '')] ?? (typeof meta?.gallery === 'string' && /^https:\/\//.test(meta.gallery) ? meta.gallery.replace(/\/+$/, '') : null)
 		const apps = []
 		// First pass: every app and the variables each one's exports.sh provides (apps that need
