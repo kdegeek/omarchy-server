@@ -470,6 +470,71 @@ test('#200: port forwards added while running are marked pending until restart a
 	assert.match(pfSrc, /After restart/)
 })
 
+test('#306: control characters in notes or name never break later settings changes and failed defines roll back', async (t) => {
+	const id = 'a1b2c3d4'
+	let failNextDefine = false
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd !== 'virsh') return ''
+			const a = args[0] === '-c' ? args.slice(2) : args
+			if (a[0] === 'list') return ' Id   Name   State\n------------------\n'
+			if (a[0] === 'define') {
+				if (failNextDefine) {
+					failNextDefine = false
+					throw new Error('virsh define: simulated failure')
+				}
+				const xmlText = await readFile(a[1], 'utf8')
+				// XML 1.0 forbids control characters except tab, LF, CR.
+				if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/.test(xmlText)) {
+					throw new Error('virsh define: XML error: not well-formed (invalid token)')
+				}
+				return ''
+			}
+			return ''
+		},
+	})
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [makeMachineRecord(env.dataDir, {id})]}))
+
+	const m = env.open()
+	await m.ready
+
+	// 1. ANSI ESC control characters in notes are stripped so XML stays valid and later edits work.
+	assert.equal(await m.procedures['machines.updateOptions'].run({id, notes: 'log \x1b[31mred\x1b[0m'}), true)
+	const afterNotes = await m.procedures['machines.details'].run({id})
+	assert.equal(afterNotes.options.notes, 'log [31mred[0m')
+	assert.equal(await m.procedures['machines.updateOptions'].run({id, onBoot: true}), true)
+	assert.ok((await m.procedures['machines.addDisk'].run({id, sizeGb: 2})).diskId)
+
+	// 2. Control characters in name are rejected cleanly without corrupting the stored name.
+	await assert.rejects(
+		() => m.procedures['machines.updateOptions'].run({id, name: 'bad\x1bname'}),
+		(err) => err instanceof RpcError && err.code === 'BAD_REQUEST',
+	)
+	assert.equal((await m.procedures['machines.details'].run({id})).name, 'Box')
+	assert.equal(await m.procedures['machines.updateOptions'].run({id, notes: 'clean'}), true)
+
+	// 3. Exported NAME_CONTROL_CHARS helper detects control chars in machine names.
+	const {NAME_CONTROL_CHARS} = await import('../omarchyd/machines.mjs')
+	assert.equal(NAME_CONTROL_CHARS.test('bad\x00name'), true)
+	assert.equal(NAME_CONTROL_CHARS.test('Good Name-1'), false)
+
+	// 4. Failed define rolls back in-memory and saved state for updateOptions and updateHardware.
+	failNextDefine = true
+	await assert.rejects(() => m.procedures['machines.updateOptions'].run({id, name: 'WillFail'}), /simulated failure/)
+	assert.equal((await m.procedures['machines.details'].run({id})).name, 'Box')
+
+	failNextDefine = true
+	await assert.rejects(() => m.procedures['machines.updateHardware'].run({id, memoryMb: 2048}), /simulated failure/)
+	assert.equal((await m.procedures['machines.details'].run({id})).hardware.memoryMb, 1024)
+	const saved = JSON.parse(await readFile(join(env.dataDir, 'machines', 'machines.json'), 'utf8'))
+	assert.equal(saved.machines[0].name, 'Box')
+	assert.equal(saved.machines[0].memoryMb, 1024)
+})
+
+
 
 
 

@@ -46,7 +46,11 @@ function execP(cmd, args, {input, cwd, timeout = 120_000} = {}) {
 	})
 }
 
-const xml = (s) => String(s).replace(/[<>&'"]/g, (c) => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;'})[c])
+const INVALID_XML_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g
+const NOTES_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFE\uFFFF]/g
+export const NAME_CONTROL_CHARS = /[\u0000-\u001F\u007F\uFFFE\uFFFF]/
+
+const xml = (s) => String(s).replace(INVALID_XML_CHARS, '').replace(/[<>&'"]/g, (c) => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;'})[c])
 const hostArch = () => (os.arch() === 'arm64' ? 'arm64' : 'amd64')
 
 // Find the expected hash for `file` in a checksum file. Handles GNU (`hash  file`, `hash *file`)
@@ -539,6 +543,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		if (!Number.isInteger(cores) || cores < 1 || cores > threads) throw new RpcError('BAD_REQUEST', `Cores must be between 1 and ${threads}`)
 		if (!Number.isInteger(memoryGb) || memoryGb < 1 || memoryGb > Math.max(1, totalGb - 1)) throw new RpcError('BAD_REQUEST', 'Not enough memory on the server for that')
 		if (!Number.isInteger(diskSizeGb) || diskSizeGb < minDisk || diskSizeGb > 4096) throw new RpcError('BAD_REQUEST', `Disk size must be between ${minDisk} and 4096 GB`)
+		if (NAME_CONTROL_CHARS.test(name)) throw new RpcError('BAD_REQUEST', 'Machine names can’t contain control characters')
 		const needsAccount = kind !== 'manual'
 		const username = String(input.username ?? '').trim()
 		const password = String(input.password ?? '')
@@ -760,11 +765,21 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 				seen.add(key)
 				return {id: typeof f.id === 'string' && /^[\w-]{1,40}$/.test(f.id) ? f.id : randomBytes(4).toString('hex'), protocol, hostPort, guestPort}
 			})
+			const prevForwards = m.portForwards
+			const hadLiveForwards = 'liveForwards' in m
+			const prevLiveForwards = m.liveForwards
 			const running = (await liveState(m)) !== 'stopped'
 			if (running && m.liveForwards === undefined) m.liveForwards = (m.portForwards ?? []).map(forwardKey)
 			else if (!running) delete m.liveForwards
 			m.portForwards = next
-			await markChanged(m)
+			try {
+				await markChanged(m)
+			} catch (error) {
+				m.portForwards = prevForwards
+				if (hadLiveForwards) m.liveForwards = prevLiveForwards
+				else delete m.liveForwards
+				throw error
+			}
 		}
 		return true
 	}
@@ -1071,9 +1086,18 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		if (sockets !== m.sockets || cores !== m.cores) changes.push(`CPU ${sockets}×${cores}`)
 		if (memoryMb !== m.memoryMb) changes.push(`memory ${memoryMb} MiB`)
 		return task(m, 'hardware', changes.join(', ') || 'settings', async () => {
+			const prev = {sockets: m.sockets, cores: m.cores, memoryMb: m.memoryMb, memoryGb: m.memoryGb, cpuType: m.cpuType, mac: m.mac, linkDown: m.linkDown}
+			const prevLayout = {machineType: m.layout.machineType, firmware: m.layout.firmware, video: m.layout.video, nic: m.layout.nic}
 			Object.assign(m, {sockets, cores, memoryMb, memoryGb: Math.max(1, Math.round(memoryMb / 1024)), cpuType, mac, linkDown: input.linkDown ?? !!m.linkDown})
 			Object.assign(m.layout, {machineType, firmware, video, nic})
-			await markChanged(m)
+			try {
+				await markChanged(m)
+			} catch (error) {
+				Object.assign(m, prev)
+				if (prev.linkDown === undefined) delete m.linkDown
+				Object.assign(m.layout, prevLayout)
+				throw error
+			}
 			return true
 		})
 	}
@@ -1082,11 +1106,13 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		await ready
 		const m = find(input.id)
 		const o = {...m.options}
+		let nextName = m.name
 		if (input.name !== undefined) {
 			const name = String(input.name).trim()
 			if (!name || name.length > 64) throw new RpcError('BAD_REQUEST', 'Give the machine a name (up to 64 characters)')
+			if (NAME_CONTROL_CHARS.test(name)) throw new RpcError('BAD_REQUEST', 'Machine names can’t contain control characters')
 			if (machines.some((x) => x.id !== m.id && x.name.toLowerCase() === name.toLowerCase())) throw new RpcError('CONFLICT', 'A machine with that name already exists')
-			m.name = name
+			nextName = name
 		}
 		for (const k of ['onBoot', 'protection', 'tablet', 'acpi', 'kvm', 'agent', 'bootMenu']) if (input[k] !== undefined) o[k] = !!input[k]
 		if (input.startupOrder !== undefined) {
@@ -1100,13 +1126,23 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			o.startupDelay = n
 		}
 		if (input.notes !== undefined) {
-			if (String(input.notes).length > 8000) throw new RpcError('BAD_REQUEST', 'Notes are limited to 8,000 characters')
-			o.notes = String(input.notes)
+			const rawNotes = String(input.notes)
+			if (rawNotes.length > 8000) throw new RpcError('BAD_REQUEST', 'Notes are limited to 8,000 characters')
+			o.notes = rawNotes.replace(NOTES_CONTROL_CHARS, '')
 		}
 		return task(m, 'options', null, async () => {
+			const prevName = m.name
+			const prevOptions = m.options
+			m.name = nextName
 			m.options = o
-			if (m.state === 'error') await save()
-			else await markChanged(m)
+			try {
+				if (m.state === 'error') await save()
+				else await markChanged(m)
+			} catch (error) {
+				m.name = prevName
+				m.options = prevOptions
+				throw error
+			}
 			return true
 		})
 	}
@@ -1119,9 +1155,17 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		const order = Array.isArray(input.order) ? input.order.map(String) : []
 		if (!order.length || order.some((x) => !ids.has(x)) || new Set(order).size !== order.length) throw new RpcError('BAD_REQUEST', 'Choose at least one boot device')
 		return task(m, 'boot', order.join(', '), async () => {
+			const prevBoot = m.boot
+			const prevOptions = m.options
 			m.boot = order
 			if (input.bootMenu !== undefined) m.options = {...m.options, bootMenu: !!input.bootMenu}
-			await markChanged(m)
+			try {
+				await markChanged(m)
+			} catch (error) {
+				m.boot = prevBoot
+				m.options = prevOptions
+				throw error
+			}
 			return true
 		})
 	}
@@ -1166,10 +1210,20 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		if (input.bus !== undefined && !BUSES.includes(input.bus)) throw new RpcError('BAD_REQUEST', 'Unknown disk bus')
 		if (input.cache !== undefined && !CACHES.includes(input.cache)) throw new RpcError('BAD_REQUEST', 'Unknown cache mode')
 		return task(m, 'edit-disk', d.id, async () => {
+			const prev = {bus: d.bus, cache: d.cache, discard: d.discard}
 			if (input.bus !== undefined) d.bus = input.bus
 			if (input.cache !== undefined) d.cache = input.cache
 			if (input.discard !== undefined && d.device === 'disk') d.discard = !!input.discard
-			await markChanged(m)
+			try {
+				await markChanged(m)
+			} catch (error) {
+				d.bus = prev.bus
+				if (prev.cache === undefined) delete d.cache
+				else d.cache = prev.cache
+				if (prev.discard === undefined) delete d.discard
+				else d.discard = prev.discard
+				throw error
+			}
 			return true
 		})
 	}
