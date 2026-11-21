@@ -566,6 +566,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 	const tickets = new Map() // one-time hand-overs from the web app
 	let registryCache = null
 	let registryWarm = null
+	let storesGen = 0
 
 	// Apps come back after a reboot only if Podman's own restart unit is on (it's off by default, and
 	// rootless Podman has no daemon to do it). It's a user unit, so this needs no sudo: servers set up
@@ -1035,18 +1036,33 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 	async function registry({refresh = false} = {}) {
 		await ready
 		if (registryCache && !refresh && Date.now() - registryCache.at < 60 * 60_000) return registryCache.list
+		const gen = storesGen
+		const snapshot = [...state.stores]
+		const stillAdded = (url) => state.stores.some((x) => x.url.toLowerCase() === url.toLowerCase())
 		const list = []
 		let dirty = false
-		for (const s of state.stores) {
+		for (const s of snapshot) {
+			if (!stillAdded(s.url)) continue
 			if (refresh || Date.now() - (s.syncedAt ?? 0) > 60 * 60_000) {
 				try {
 					await syncStore(s.url)
+					if (!stillAdded(s.url)) {
+						await rm(storeDir(s.url), {recursive: true, force: true}).catch(() => {})
+						continue
+					}
 					s.syncedAt = Date.now()
 					dirty = true
-				} catch {}
+				} catch {
+					if (!stillAdded(s.url)) {
+						await rm(storeDir(s.url), {recursive: true, force: true}).catch(() => {})
+						continue
+					}
+				}
 			}
+			if (!stillAdded(s.url)) continue
 			try {
 				const loaded = await loadStore(s.url)
+				if (!stillAdded(s.url)) continue
 				if (s.name) loaded.meta.name = s.name
 				const prev = s.meta
 				s.meta = loaded.meta
@@ -1061,11 +1077,12 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		}
 		// Apps that are part of the server itself (Tailscale) come first, so a store can't stand in for them.
 		if (systemApps) list.unshift({url: BUILTIN_STORE, meta: {id: 'omarchy-server', name: 'Omarchy Server'}, apps: systemApps.listings()})
+		const current = list.filter((l) => l.url === BUILTIN_STORE || l.url === IMPORTED_STORE || stillAdded(l.url))
 		// Installed apps pick up how their listing says to open them (https, an https app inside),
 		// so an app installed before its listing changed doesn't need reinstalling.
 		for (const app of state.apps) {
 			if (app.system) continue
-			const src = list.find((l) => !app.store || l.url === app.store)?.apps.find((x) => x.id === app.id) ?? list.flatMap((l) => l.apps).find((x) => x.id === app.id)
+			const src = current.find((l) => !app.store || l.url === app.store)?.apps.find((x) => x.id === app.id) ?? current.flatMap((l) => l.apps).find((x) => x.id === app.id)
 			if (!src) continue
 			const requiresHttps = !!src.requiresHttps
 			const internalHttps = !!src.web?.https
@@ -1076,8 +1093,8 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 			else delete app.internalHttps
 		}
 		if (dirty) await save()
-		registryCache = {at: Date.now(), list}
-		return list
+		if (storesGen === gen) registryCache = {at: Date.now(), list: current}
+		return current
 	}
 	// An app's listing. An installed app stays with the store it came from (two stores can list the
 	// same id with different folders and settings, and an update must never switch between them).
@@ -2183,6 +2200,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 						throw e
 					}
 					state.stores.push({url, meta: loaded.meta, syncedAt: Date.now(), ...(localDefault && url.toLowerCase() === normalize(localDefault.url).toLowerCase() ? {localDefault: true} : {})})
+					storesGen++
 					registryCache = null
 					await save()
 					return true
@@ -2197,6 +2215,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 					if (!s) throw new RpcError('NOT_FOUND', 'That store isn’t added')
 					state.stores = state.stores.filter((x) => x !== s)
 					await rm(storeDir(s.url), {recursive: true, force: true})
+					storesGen++
 					registryCache = null
 					await save()
 					return true
