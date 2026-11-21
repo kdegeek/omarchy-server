@@ -202,7 +202,7 @@ export function createOmarchyTheme({home, run = null, env = process.env, systemS
 			() => jobs.delete(slug),
 			(e) => {
 				jobs.set(slug, {state: 'error', error: e.message})
-				setTimeout(() => jobs.get(slug)?.state === 'error' && jobs.delete(slug), 5 * 60_000)
+				setTimeout(() => jobs.get(slug)?.state === 'error' && jobs.delete(slug), 5 * 60_000).unref?.()
 			},
 		)
 	}
@@ -245,6 +245,7 @@ export function createOmarchyTheme({home, run = null, env = process.env, systemS
 		if (!d?.user) throw Object.assign(new Error('Only themes you added can be removed'), {code: 'PRECONDITION_FAILED'})
 		if ((await currentName()) === slug) throw Object.assign(new Error('Switch to another theme before removing this one'), {code: 'PRECONDITION_FAILED'})
 		await inTurn('omarchy-theme-remove', [slug])
+		jobs.delete(slug)
 		return true
 	}
 
