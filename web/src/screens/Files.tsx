@@ -27,6 +27,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
+import { batchToastMessage, runFileBatch } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -517,6 +518,23 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
           ? listing.isLoading
           : false;
 
+  const finishBatch = async (
+    action: "trash" | "delete" | "restore",
+    paths: string[],
+    run: (p: string) => Promise<unknown>,
+  ) => {
+    const res = await runFileBatch(paths, run);
+    const msg = batchToastMessage(action, paths.length, res);
+    if (msg) toast(msg.text, msg.error);
+    if (res.succeeded.length) {
+      setSelected((s) => {
+        const next = new Set(s);
+        for (const p of res.succeeded) next.delete(p);
+        return next;
+      });
+      setOpen((cur) => (cur && res.succeeded.includes(cur.path) ? null : cur));
+    }
+  };
   const trashItems = async (paths: string[]) => {
     const ok = await confirm({
       title:
@@ -529,15 +547,7 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
       icon: "trash",
     });
     if (!ok) return;
-    for (const p of paths)
-      await act("files.trash", { path: p }).catch(() => {});
-    toast(
-      paths.length === 1
-        ? "Moved to Trash"
-        : `${paths.length} items moved to Trash`,
-    );
-    setSelected(new Set());
-    setOpen(null);
+    await finishBatch("trash", paths, (p) => act("files.trash", { path: p }));
   };
   const deleteForever = async (paths: string[]) => {
     const ok = await confirm({
@@ -551,20 +561,12 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
       icon: "trash",
     });
     if (!ok) return;
-    for (const p of paths)
-      await act("files.delete", { path: p }).catch(() => {});
-    toast("Deleted");
-    setSelected(new Set());
-    setOpen(null);
+    await finishBatch("delete", paths, (p) => act("files.delete", { path: p }));
   };
   const restore = async (paths: string[]) => {
-    for (const p of paths)
-      await act("files.restore", { path: p, collision: "keep-both" }).catch(
-        () => {},
-      );
-    toast(paths.length === 1 ? "Restored" : `${paths.length} items restored`);
-    setSelected(new Set());
-    setOpen(null);
+    await finishBatch("restore", paths, (p) =>
+      act("files.restore", { path: p, collision: "keep-both" }),
+    );
   };
   const emptyTrash = async () => {
     if (
