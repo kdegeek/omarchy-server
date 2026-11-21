@@ -23,3 +23,19 @@ test('#201: port forwarding tracks ports across all machines and resets form onl
 	const addBlock = src.match(/const add = \([\s\S]*?\n\t\}/)?.[0] ?? ''
 	assert.match(addBlock, /onSuccess|\(\) => \{[\s\S]*setAdding\(false\)/, 'add() must close form only in onSuccess')
 })
+
+test('#208: flipping an Options switch leaves open Name and Start order editors intact', async () => {
+	const src = await readFile(new URL('../web/src/machines/panels.tsx', import.meta.url), 'utf8')
+	const block = src.match(/export function OptionsPanel[\s\S]*?\n\}\nconst bootName/)?.[0] ?? ''
+	assert.ok(block.length > 0, 'OptionsPanel found')
+	const flagBlock = block.match(/const flag = [\s\S]*?\n\t\)/)?.[0] ?? ''
+	assert.ok(flagBlock.length > 0, 'flag helper found')
+	assert.equal(/\bset\(/.test(flagBlock), false, 'flag must not call row-closing set()')
+	assert.equal(/setOpen\(/.test(flagBlock), false, 'flag must not call setOpen')
+	assert.match(flagBlock, /action\.mutate\(/)
+	assert.match(block, /if \(open === 'name'\)\s*setName\(d\.name\)/)
+	assert.match(block, /if \(open === 'order'\)/)
+	assert.match(block, /set\([^\n]*'Renamed'/)
+	assert.match(block, /set\([^\n]*'Start order saved'/)
+})
+
