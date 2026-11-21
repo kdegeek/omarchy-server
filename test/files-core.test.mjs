@@ -112,3 +112,31 @@ describe('files: #282 opening Trash before anything has been trashed', () => {
 		assert.deepEqual(await readdir(extDir), [])
 	})
 })
+
+describe('files: #488 Unicode NFC normalization in search', () => {
+	test('search matches accented names across NFD and NFC forms', async (t) => {
+		const scratch = await realpath(await mkdtemp(join(os.tmpdir(), 'omarchy-nfd-')))
+		t.after(() => rm(scratch, {recursive: true, force: true}))
+		const h = join(scratch, 'home')
+		const d = join(scratch, 'data')
+		await mkdir(h, {recursive: true})
+		await mkdir(d, {recursive: true})
+		await writeFile(join(h, 'cafe\u0301.txt'), 'nfd')
+		await writeFile(join(h, 'r\u00e9sum\u00e9.txt'), 'nfc')
+
+		const f = createFiles({home: h, dataDir: d})
+		const run = (name, input) => f.procedures[name].run(input)
+
+		const byNfc = await run('files.search', {query: 'caf\u00e9'})
+		assert.equal(byNfc.length, 1)
+		assert.equal(byNfc[0].name.normalize('NFC'), 'caf\u00e9.txt')
+
+		const byUpperNfc = await run('files.search', {query: 'CAF\u00c9'})
+		assert.equal(byUpperNfc.length, 1)
+		assert.equal(byUpperNfc[0].name.normalize('NFC'), 'caf\u00e9.txt')
+
+		const byNfd = await run('files.search', {query: 're\u0301sume\u0301'})
+		assert.equal(byNfd.length, 1)
+		assert.equal(byNfd[0].name.normalize('NFC'), 'r\u00e9sum\u00e9.txt')
+	})
+})
