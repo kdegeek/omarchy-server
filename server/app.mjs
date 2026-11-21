@@ -1090,7 +1090,7 @@ export function createApp({store, staticDir, fetchImpl = fetch, secureCookies = 
 				const v = upstream.headers.get(h)
 				if (v) res.setHeader(h, v)
 			}
-			res.setHeader('Cache-Control', kind === 'thumbnail' ? 'private, max-age=3600' : 'private, no-store')
+			res.setHeader('Cache-Control', kind === 'thumbnail' && upstream.ok ? 'private, max-age=3600' : 'private, no-store')
 			res.setHeader('X-Content-Type-Options', 'nosniff')
 			// Previews render inline but sandboxed, so a file can't script this app.
 			if (kind === 'view') res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
