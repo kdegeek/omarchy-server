@@ -1727,6 +1727,10 @@ BACKUP_ACTIONS = {"backup-folders": lambda conn, cid, args, cfg: backup_folders(
 
 
 # ---------------------------------------------------------------------------------------------
+REPORT_INTERVAL = 3
+HELLO_INTERVAL = 300
+
+
 class Connection:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -1744,6 +1748,19 @@ class Connection:
         except (OSError, AttributeError):
             pass
 
+    def _report_step(self, live_sampler, last_hello, now):
+        # Push the last snapshot only while someone is reading. Calling metrics()
+        # here would count as a read and the sampler would never go idle.
+        if live_sampler.active():
+            snap = dict(live_sampler.peek())
+            snap["updates"] = updates_waiting(self.pkg)
+            self.send({"op": "metrics", "metrics": snap})
+        # Facts change now and then (plugins, theme, a desktop session starting).
+        if now - last_hello >= HELLO_INTERVAL:
+            self.send({"op": "hello", "info": info(), "abilities": self.allowed})
+            return now
+        return last_hello
+
     def run(self):
         url = self.cfg["server"].replace("https://", "wss://", 1).rstrip("/") + "/connector/ws"
         self.ws = WS(url, {"Authorization": f"Bearer {self.cfg['id']}:{self.cfg['key']}", "User-Agent": f"omarchy-connector/{VERSION}"}, CA_FILE)
@@ -1760,16 +1777,9 @@ class Connection:
         self.sampler = live_sampler
 
         def report():
-            while not stop.wait(3):
-                # Push the last snapshot only while someone is reading. Calling metrics()
-                # here would count as a read and the sampler would never go idle.
-                if live_sampler.active():
-                    snap = dict(live_sampler.peek())
-                    snap["updates"] = updates_waiting(self.pkg)
-                    self.send({"op": "metrics", "metrics": snap})
-                # Facts change now and then (plugins, theme, a desktop session starting).
-                if int(time.time()) % 300 < 10:
-                    self.send({"op": "hello", "info": info(), "abilities": self.allowed})
+            last_hello = time.monotonic()
+            while not stop.wait(REPORT_INTERVAL):
+                last_hello = self._report_step(live_sampler, last_hello, time.monotonic())
 
         threading.Thread(target=report, daemon=True).start()
         try:
