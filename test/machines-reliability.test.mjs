@@ -256,5 +256,38 @@ test('#317: Omarchy installer machines do not expose Cloud-Init and updateCloudI
 	assert.match(panelsSrc, /drive\.role === 'installer'/)
 })
 
+test('#659: tasks left running when omarchyd restarted are marked error on startup', async (t) => {
+	const id = 'a1b2c3d4'
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => (cmd === 'virsh' && args.includes('list') ? ' Id   Name   State\n------------------\n' : ''),
+	})
+	const rec = makeMachineRecord(env.dataDir, {
+		id,
+		tasks: [
+			{id: 't2', type: 'backup', detail: '100-box-20261120-000000', status: 'running', startedAt: 1760000002000},
+			{id: 't1', type: 'start', status: 'ok', startedAt: 1760000000000, endedAt: 1760000001000},
+		],
+	})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec]}))
+
+	const m = env.open()
+	await m.ready
+
+	const tasks = await m.procedures['machines.tasks'].run()
+	const det = await m.procedures['machines.details'].run({id})
+	for (const list of [tasks, det.tasks]) {
+		const backupTask = list.find((x) => x.id === 't2')
+		assert.equal(backupTask.status, 'error')
+		assert.equal(typeof backupTask.endedAt, 'number')
+		assert.equal(backupTask.message, 'Interrupted by a restart')
+		const okTask = list.find((x) => x.id === 't1')
+		assert.equal(okTask.status, 'ok')
+		assert.equal(okTask.endedAt, 1760000001000)
+	}
+	const saved = JSON.parse(await readFile(join(env.dataDir, 'machines', 'machines.json'), 'utf8'))
+	assert.equal(saved.machines[0].tasks.find((x) => x.id === 't2').status, 'error')
+})
+
+
 
 

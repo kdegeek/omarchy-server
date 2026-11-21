@@ -124,6 +124,12 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			for (const m of machines) if (m.layout?.video === 'virtio') m.layout.video = 'vga'
 			for (const m of machines) if (m.state === 'installing') Object.assign(m, {state: 'error', errorMessage: 'Setup was interrupted. Delete this machine and create it again.'})
 			for (const m of machines) normalize(m)
+			const interruptedAt = Date.now()
+			for (const m of machines) {
+				for (const t of m.tasks ?? []) {
+					if (t.status === 'running') Object.assign(t, {status: 'error', endedAt: interruptedAt, message: 'Interrupted by a restart'})
+				}
+			}
 			await save().catch(() => {})
 		}
 		autostart()
