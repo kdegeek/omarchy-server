@@ -139,4 +139,36 @@ export function filterUnsyncedPhotos<T extends {name: string; size: number}>(pic
 	return picked.filter((f) => !have.has(`${f.name}:${f.size}`) && !have.has(`${stripCopySuffix(f.name)}:${f.size}`))
 }
 
+export type FileDragEventLike = {
+	preventDefault: () => void
+	dataTransfer: {types: readonly string[]; dropEffect: 'none' | 'copy' | 'link' | 'move'}
+}
+
+/** True when a drag event carries files from the OS. */
+export function isFileDrag(e: FileDragEventLike): boolean {
+	return e.dataTransfer.types.includes('Files')
+}
+
+/** Always prevent browser navigation for file drags; return true only when dropping can upload here. */
+export function handleFileDragEnter(e: FileDragEventLike, canUpload: boolean): boolean {
+	if (!isFileDrag(e)) return false
+	e.preventDefault()
+	return canUpload
+}
+
+/** Keep dropEffect visual feedback accurate and prevent default browser navigation for file drags. */
+export function handleFileDragOver(e: FileDragEventLike, canUpload: boolean): boolean {
+	if (!isFileDrag(e)) return false
+	e.preventDefault()
+	e.dataTransfer.dropEffect = canUpload ? 'copy' : 'none'
+	return canUpload
+}
+
+/** Always swallow file drops on the Files screen; return true only when uploads are allowed here. */
+export function handleFileDrop(e: FileDragEventLike, canUpload: boolean): boolean {
+	if (!isFileDrag(e)) return false
+	e.preventDefault()
+	return canUpload
+}
+
 export type {FileEntry}

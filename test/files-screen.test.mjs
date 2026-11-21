@@ -272,3 +272,49 @@ describe('files screen: #489 Sync photos recognizes keep-both copies', () => {
 		assert.match(src, /const fresh = filterUnsyncedPhotos\(picked, listing\.data\?\.files \?\? \[\]\);/)
 	})
 })
+
+describe('files screen: #492 prevent file drop navigation in non-uploadable views', () => {
+	const makeDragEvent = (types) => {
+		let prevented = false
+		return {
+			types,
+			get prevented() {
+				return prevented
+			},
+			event: {
+				preventDefault() {
+					prevented = true
+				},
+				dataTransfer: {
+					types,
+					dropEffect: 'copy',
+				},
+			},
+		}
+	}
+
+	test('drag enter, drag over, and drop prevent default for file drags even when canUpload is false', () => {
+		for (const fn of ['handleFileDragEnter', 'handleFileDragOver', 'handleFileDrop']) {
+			const disallowed = makeDragEvent(['Files'])
+			assert.equal(helpers[fn](disallowed.event, false), false, fn)
+			assert.equal(disallowed.prevented, true, fn)
+			if (fn === 'handleFileDragOver') assert.equal(disallowed.event.dataTransfer.dropEffect, 'none')
+
+			const allowed = makeDragEvent(['Files'])
+			assert.equal(helpers[fn](allowed.event, true), true, fn)
+			assert.equal(allowed.prevented, true, fn)
+			if (fn === 'handleFileDragOver') assert.equal(allowed.event.dataTransfer.dropEffect, 'copy')
+
+			const nonFile = makeDragEvent(['text/plain'])
+			assert.equal(helpers[fn](nonFile.event, true), false, fn)
+			assert.equal(nonFile.prevented, false, fn)
+		}
+	})
+
+	test('Files.tsx uses handleFileDragEnter, handleFileDragOver, and handleFileDrop', async () => {
+		const src = await filesSource()
+		assert.match(src, /handleFileDragEnter\(e, canUpload\)/)
+		assert.match(src, /handleFileDragOver\(e, canUpload\)/)
+		assert.match(src, /handleFileDrop\(e, canUpload && !!uploadDir\)/)
+	})
+})
