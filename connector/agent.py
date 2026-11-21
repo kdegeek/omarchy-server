@@ -914,10 +914,106 @@ def vnc_release():
 
 # ---------------------------------------------------------------------------------------------
 # Channels: a shell or the screen, joined to the server by a channel number.
+CHANNEL_INPUT_LIMIT = 4 * 1024 * 1024
+
+
 class Channel:
     def __init__(self, conn, ch):
         self.conn, self.ch, self.closed = conn, ch, False
         self.head = struct.pack(">I", ch)
+        self._close_lock = threading.Lock()
+        self._in_lock = threading.Lock()
+        self._in_buf = bytearray()
+        self._wake_r = None
+        self._wake_w = None
+
+    def _init_input(self):
+        r, w = os.pipe()
+        os.set_blocking(r, False)
+        os.set_blocking(w, False)
+        self._wake_r, self._wake_w = r, w
+
+    def _wake_locked(self):
+        if self._wake_w is not None:
+            try:
+                os.write(self._wake_w, b"\x00")
+            except OSError:
+                pass
+
+    def _drain_wake(self):
+        while True:
+            try:
+                if not os.read(self._wake_r, 4096):
+                    break
+            except OSError:
+                break
+
+    def _close_input(self):
+        with self._in_lock:
+            wfd, self._wake_w = self._wake_w, None
+            rfd, self._wake_r = self._wake_r, None
+            self._in_buf.clear()
+        for fd in (rfd, wfd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    def _enqueue(self, data, overflow_reason):
+        if not data or self.closed:
+            return
+        overflow = False
+        with self._in_lock:
+            if self._wake_w is None:
+                return
+            if len(self._in_buf) + len(data) > CHANNEL_INPUT_LIMIT:
+                overflow = True
+            else:
+                self._in_buf.extend(data)
+                self._wake_locked()
+        if overflow:
+            self.ended(overflow_reason, code=1011)
+
+    def _pump(self, io_obj, read_fn, write_fn, ended_reason):
+        try:
+            while not self.closed:
+                with self._in_lock:
+                    want_write = bool(self._in_buf)
+                try:
+                    r, w, _ = select.select([io_obj, self._wake_r], [io_obj] if want_write else [], [], 1)
+                except OSError:
+                    break
+                if self.closed:
+                    break
+                if self._wake_r in r:
+                    self._drain_wake()
+                if io_obj in w:
+                    with self._in_lock:
+                        chunk = bytes(self._in_buf[:65536])
+                    if chunk:
+                        try:
+                            written = write_fn(chunk)
+                        except BlockingIOError:
+                            written = 0
+                        except OSError:
+                            break
+                        if written:
+                            with self._in_lock:
+                                del self._in_buf[:written]
+                if io_obj in r:
+                    try:
+                        data = read_fn(65536)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    self.out(data)
+            self.ended(ended_reason)
+        finally:
+            self._close_input()
 
     def out(self, data):
         try:
@@ -925,9 +1021,21 @@ class Channel:
         except OSError:
             self.close()
 
+    def _close_channel(self):
+        pass
+
+    def close(self):
+        with self._close_lock:
+            if self.closed:
+                return False
+            self.closed = True
+        with self._in_lock:
+            self._wake_locked()
+        self._close_channel()
+        return True
+
     def ended(self, reason="", code=1000):
-        if not self.closed:
-            self.close()
+        if self.close():
             self.conn.send({"op": "closed", "ch": self.ch, "reason": reason, "code": code})
 
 
@@ -947,10 +1055,23 @@ class Shell(Channel):
                 pass
             os._exit(127)
         self.pid, self.fd = pid, fd
+        try:
+            os.set_blocking(self.fd, False)
+            self._init_input()
+        except OSError:
+            self._close_input()
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.reap()
+            raise
         self.resize(cols, rows)
         threading.Thread(target=self.pump, daemon=True).start()
 
     def resize(self, cols, rows):
+        if self.closed:
+            return
         try:
             cols = min(500, max(10, int(cols or 80)))
             rows = min(300, max(4, int(rows or 24)))
@@ -962,17 +1083,7 @@ class Shell(Channel):
         # This thread owns the pty: it alone closes it, so its number can't be reused by a new
         # terminal while this loop still reads from it.
         try:
-            while not self.closed:
-                try:
-                    r, _, _ = select.select([self.fd], [], [], 1)
-                    if r:
-                        data = os.read(self.fd, 65536)
-                        if not data:
-                            break
-                        self.out(data)
-                except OSError:
-                    break
-            self.ended("Shell ended")
+            self._pump(self.fd, lambda n: os.read(self.fd, n), lambda b: os.write(self.fd, b), "Shell ended")
         finally:
             try:
                 os.close(self.fd)
@@ -996,15 +1107,9 @@ class Shell(Channel):
             pass
 
     def write(self, data):
-        try:
-            os.write(self.fd, data)
-        except OSError:
-            self.ended("Shell ended")
+        self._enqueue(data, "Terminal stopped reading input")
 
-    def close(self):
-        if self.closed:
-            return
-        self.closed = True
+    def _close_channel(self):
         try:
             os.kill(self.pid, signal.SIGHUP)
         except OSError:
@@ -1019,39 +1124,34 @@ class Screen(Channel):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             self.sock.connect(VNC_SOCK)
+            self.sock.setblocking(False)
+            self._init_input()
         except OSError:
+            self._close_input()
+            try:
+                self.sock.close()
+            except OSError:
+                pass
             vnc_release()
             raise
         threading.Thread(target=self.pump, daemon=True).start()
 
     def pump(self):
-        while not self.closed:
+        try:
+            self._pump(self.sock, self.sock.recv, self.sock.send, "The screen sharing ended")
+        finally:
             try:
-                data = self.sock.recv(65536)
+                self.sock.close()
             except OSError:
-                break
-            if not data:
-                break
-            self.out(data)
-        self.ended("The screen sharing ended")
+                pass
 
     def write(self, data):
-        try:
-            self.sock.sendall(data)
-        except OSError:
-            self.ended("The screen sharing ended")
+        self._enqueue(data, "The screen sharing stopped reading input")
 
-    def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        # shutdown() wakes the pump's blocked recv(); close() alone leaves the VNC connection open.
+    def _close_channel(self):
+        # shutdown() wakes the pump's select(); the pump thread closes self.sock.
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            self.sock.close()
         except OSError:
             pass
         vnc_release()
@@ -1579,6 +1679,8 @@ class Connection:
         self.connected_at = None
         self.allowed = cfg.get("abilities", {})
         self.channels = {}
+        self._ch_lock = threading.Lock()
+        self._opening = set()
         self.ws = None
         self.pkg = package_manager()
 
@@ -1621,7 +1723,9 @@ class Connection:
                 op, data = self.ws.recv()
                 if op == 0x2:
                     if len(data) >= 4:
-                        ch = self.channels.get(struct.unpack(">I", data[:4])[0])
+                        cid = struct.unpack(">I", data[:4])[0]
+                        with self._ch_lock:
+                            ch = self.channels.get(cid)
                         if ch:
                             ch.write(data[4:])
                     continue
@@ -1629,10 +1733,33 @@ class Connection:
         finally:
             stop.set()
             live_sampler.stop()
-            for ch in list(self.channels.values()):
+            with self._ch_lock:
+                self._opening.clear()
+                channels = list(self.channels.values())
+                self.channels.clear()
+            for ch in channels:
                 ch.close()
-            self.channels.clear()
             self.ws.close()
+
+    def _open_screen(self, ch):
+        try:
+            screen = Screen(self, ch)
+        except Exception as e:  # noqa: BLE001 - said back to the person, in plain words
+            with self._ch_lock:
+                still_open = ch in self._opening
+                self._opening.discard(ch)
+            if still_open:
+                self.send({"op": "closed", "ch": ch, "code": 1011, "reason": str(e)[:200]})
+            return
+        with self._ch_lock:
+            if ch not in self._opening:
+                cancelled = True
+            else:
+                cancelled = False
+                self._opening.discard(ch)
+                self.channels[ch] = screen
+        if cancelled:
+            screen.close()
 
     def handle(self, msg):
         op = msg.get("op")
@@ -1642,18 +1769,29 @@ class Connection:
             ability = "terminal" if kind == "pty" else "desktop" if kind == "vnc" else None
             if not ability or not self.allowed.get(ability):
                 return self.send({"op": "closed", "ch": ch, "code": 1011, "reason": f"This computer doesn’t allow the {ability or 'that'}"})
-            try:
-                self.channels[ch] = Shell(self, ch, msg.get("cols"), msg.get("rows")) if kind == "pty" else Screen(self, ch)
-            except Exception as e:  # noqa: BLE001 - said back to the person, in plain words
-                self.send({"op": "closed", "ch": ch, "code": 1011, "reason": str(e)[:200]})
+            if kind == "pty":
+                try:
+                    chan = Shell(self, ch, msg.get("cols"), msg.get("rows"))
+                except Exception as e:  # noqa: BLE001 - said back to the person, in plain words
+                    return self.send({"op": "closed", "ch": ch, "code": 1011, "reason": str(e)[:200]})
+                with self._ch_lock:
+                    self.channels[ch] = chan
+            else:
+                with self._ch_lock:
+                    self._opening.add(ch)
+                threading.Thread(target=self._open_screen, args=(ch,), daemon=True).start()
         elif op == "resize":
             # The terminal's window changed size: the shell takes it (the kernel tells the programs
             # in it with SIGWINCH, so full-screen ones redraw). Older servers never send this.
-            ch = self.channels.get(int(msg.get("ch", 0)))
+            with self._ch_lock:
+                ch = self.channels.get(int(msg.get("ch", 0)))
             if isinstance(ch, Shell):
                 ch.resize(msg.get("cols"), msg.get("rows"))
         elif op == "close":
-            ch = self.channels.pop(int(msg.get("ch", 0)), None)
+            cid = int(msg.get("ch", 0))
+            with self._ch_lock:
+                self._opening.discard(cid)
+                ch = self.channels.pop(cid, None)
             if ch:
                 ch.close()
         elif op == "watch":
