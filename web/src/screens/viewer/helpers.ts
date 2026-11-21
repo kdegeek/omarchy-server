@@ -136,3 +136,16 @@ export function zipTruncatedNote(totalEntries: number): string | null {
   if (totalEntries <= ZIP_ENTRY_LIMIT) return null;
   return `Showing the first ${ZIP_ENTRY_LIMIT.toLocaleString()} of ${totalEntries.toLocaleString()} entries.`;
 }
+
+const EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]';
+
+export function shouldIgnoreViewerKey(
+  target: EventTarget | null,
+  hasOpenSheet: () => boolean = () => typeof document !== "undefined" && !!document.querySelector(".sheet"),
+): boolean {
+  if (hasOpenSheet()) return true;
+  if (!target || typeof target !== "object") return false;
+  const el = target as { closest?: (sel: string) => unknown; isContentEditable?: boolean };
+  if (el.isContentEditable) return true;
+  return typeof el.closest === "function" && !!el.closest(EDITABLE_SELECTOR);
+}

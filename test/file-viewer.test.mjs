@@ -11,6 +11,7 @@ import {
 	handleDocumentLinkClick,
 	headingSlug,
 	renderMarkdownHtml,
+	shouldIgnoreViewerKey,
 	zipTruncatedNote,
 } from '../web/src/screens/viewer/helpers.ts'
 
@@ -231,4 +232,28 @@ test('ZipView shows a note when a zip archive has more than 5,000 entries', asyn
 	const src = await readFile(new URL('../web/src/screens/viewer/FileViewer.tsx', import.meta.url), 'utf8')
 	assert.match(src, /entries\.slice\(0,\s*ZIP_ENTRY_LIMIT\)/)
 	assert.match(src, /fv-note[\s\S]{0,80}zipTruncatedNote/)
+})
+
+test('PdfView and PptxView ignore keyboard navigation inside editable fields or open sheets', async () => {
+	const fakeTarget = (matched) => ({
+		closest(sel) {
+			return matched && sel.includes(matched) ? this : null
+		},
+	})
+	const noSheet = () => false
+	const openSheet = () => true
+
+	assert.equal(shouldIgnoreViewerKey(fakeTarget('input'), noSheet), true)
+	assert.equal(shouldIgnoreViewerKey(fakeTarget('textarea'), noSheet), true)
+	assert.equal(shouldIgnoreViewerKey(fakeTarget('select'), noSheet), true)
+	assert.equal(shouldIgnoreViewerKey(fakeTarget('[contenteditable="true"]'), noSheet), true)
+	assert.equal(shouldIgnoreViewerKey({isContentEditable: true}, noSheet), true)
+	assert.equal(shouldIgnoreViewerKey(fakeTarget(null), openSheet), true)
+	assert.equal(shouldIgnoreViewerKey(fakeTarget(null), noSheet), false)
+	assert.equal(shouldIgnoreViewerKey(null, noSheet), false)
+	assert.equal(shouldIgnoreViewerKey({}, noSheet), false)
+
+	const src = await readFile(new URL('../web/src/screens/viewer/FileViewer.tsx', import.meta.url), 'utf8')
+	assert.match(src, /function PdfView[\s\S]*?if \(!doc \|\| shouldIgnoreViewerKey\(e\.target\)\) return;/)
+	assert.match(src, /function PptxView[\s\S]*?if \(!deck \|\| shouldIgnoreViewerKey\(e\.target\)\) return;/)
 })

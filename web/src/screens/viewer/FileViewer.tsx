@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { mutate, type FileEntry } from "../../api";
 import { Icon, type IconName } from "../../icons";
 import { bytes, haptic, usePortalRoot, useToast } from "../../ui";
-import { ZIP_ENTRY_LIMIT, handleDocumentLinkClick, renderMarkdownHtml, zipTruncatedNote } from "./helpers";
+import { ZIP_ENTRY_LIMIT, handleDocumentLinkClick, renderMarkdownHtml, shouldIgnoreViewerKey, zipTruncatedNote } from "./helpers";
 import type { Sheet, Shape, ZipEntry } from "./office";
 
 const enc = encodeURIComponent;
@@ -526,7 +526,7 @@ function PdfView(b: BodyProps) {
   }, [doc, page]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!doc) return;
+      if (!doc || shouldIgnoreViewerKey(e.target)) return;
       if (e.key === "ArrowRight" || e.key === "PageDown") goPage(Math.min(doc.numPages, page + 1));
       if (e.key === "ArrowLeft" || e.key === "PageUp") goPage(Math.max(1, page - 1));
     };
@@ -941,7 +941,7 @@ function PptxView(b: BodyProps) {
   }, [deck, cur]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!deck) return;
+      if (!deck || shouldIgnoreViewerKey(e.target)) return;
       if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown") (e.preventDefault(), go(Math.min(deck.slides.length - 1, cur + 1)));
       if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "PageUp") (e.preventDefault(), go(Math.max(0, cur - 1)));
     };
