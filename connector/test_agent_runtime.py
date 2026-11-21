@@ -208,5 +208,21 @@ class ReportHelloInterval(unittest.TestCase):
         self.assertEqual(len([m for m in sent if m.get("op") == "hello"]), 1)
         self.assertEqual(last_hello, 300.0)
 
+
+class NonUtf8Read(unittest.TestCase):
+    # #543: one non-UTF-8 byte in /proc/mounts must not empty the whole Disks list.
+    def test_read_and_disks_survive_non_utf8_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            mounts = os.path.join(d, "mounts")
+            with open(mounts, "wb") as f:
+                f.write(b"/dev/sda1 / ext4 rw 0 0\n/dev/sdb1 /mnt/caf\xe9 ext4 rw 0 0\n")
+            text = agent.read(mounts)
+            self.assertIn("/mnt/caf\ufffd", text)
+            orig_read = agent.read
+            st = mock.Mock(f_blocks=100, f_frsize=4096, f_bfree=50)
+            with mock.patch.object(agent, "read", lambda p, default="": orig_read(mounts, default) if p == "/proc/mounts" else ""), mock.patch("os.statvfs", lambda p: st):
+                got = [x["mount"] for x in agent.disks()]
+            self.assertEqual(got, ["/", "/mnt/caf\ufffd"])
+
 if __name__ == "__main__":
     unittest.main()
