@@ -132,10 +132,10 @@ export function formatExcelSerial(serial: number, kind: ExcelFormatKind, date190
   const time = `${hh}:${mm}`;
   return serial >= 0 && serial < 1 ? time : `${day} ${time}`;
 }
-const cleanNum = (v: string) => {
+export const cleanNum = (v: string) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return v;
-  return Number.isInteger(n) ? String(n) : String(Math.round(n * 1e10) / 1e10);
+  return Number.isInteger(n) ? String(n) : String(Number(n.toPrecision(15)));
 };
 
 export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {

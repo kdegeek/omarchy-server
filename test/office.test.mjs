@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {after, before, test} from 'node:test'
 import JSZip from 'jszip'
 
-import {readXlsx} from '../web/src/screens/viewer/office.ts'
+import {cleanNum, readXlsx} from '../web/src/screens/viewer/office.ts'
 
 const unescapeXml = (s) =>
 	s.replace(/&(#x[0-9a-fA-F]+|#\d+|lt|gt|amp|quot|apos);/g, (_, e) => {
@@ -283,4 +283,25 @@ test('readXlsx handles the 1900 leap-year serial quirk without shifting 1904 wor
 		}),
 	)
 	assert.deepEqual(s1904[0].rows, [['1904-01-01', '1904-01-02', '1904-02-29', '1904-03-01']])
+})
+
+test('readXlsx and cleanNum keep plain and small numbers exact without float noise', async () => {
+	const buf = await makeXlsx({
+		sheetXml:
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+			'<row r="1">' +
+			'<c r="A1"><v>398133.03</v></c>' +
+			'<c r="B1"><v>1.5E-11</v></c>' +
+			'<c r="C1"><v>0.30000000000000004</v></c>' +
+			'<c r="D1"><v>7551937647.78</v></c>' +
+			'</row></sheetData></worksheet>',
+	})
+	const sheets = await readXlsx(buf)
+	assert.deepEqual(sheets[0].rows, [['398133.03', '1.5e-11', '0.3', '7551937647.78']])
+
+	assert.equal(cleanNum('308191.09'), '308191.09')
+	assert.equal(cleanNum('414562.59'), '414562.59')
+	assert.equal(cleanNum('-0'), '0')
+	assert.equal(cleanNum('1e-20'), '1e-20')
 })
