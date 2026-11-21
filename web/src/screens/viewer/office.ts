@@ -213,6 +213,16 @@ export const cleanNum = (v: string) => {
   return Number.isInteger(n) ? String(n) : String(Number(n.toPrecision(15)));
 };
 
+function cellText(el: Element | null): string {
+  if (!el) return "";
+  let out = "";
+  for (const child of kids(el)) {
+    if (child.localName === "t") out += child.textContent ?? "";
+    else if (child.localName === "r") for (const t of kids(child, "t")) out += t.textContent ?? "";
+  }
+  return out;
+}
+
 export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
   const zip = await openZip(buf);
   const wbPath = "xl/workbook.xml";
@@ -223,7 +233,7 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
   const wbRels = await rels(zip, wbPath);
   const shared: string[] = [];
   const sst = await read(zip, "xl/sharedStrings.xml");
-  if (sst) for (const si of all(xml(sst), "si")) shared.push(all(si, "t").map((t) => t.textContent ?? "").join(""));
+  if (sst) for (const si of all(xml(sst), "si")) shared.push(cellText(si));
   // Which number formats are dates or durations.
   const dateStyles: (ExcelFormatKind | null)[] = [];
   const st = await read(zip, "xl/styles.xml");
@@ -262,7 +272,7 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
         const v = first(c, "v")?.textContent ?? "";
         let val = "";
         if (t === "s") val = shared[Number(v)] ?? "";
-        else if (t === "inlineStr") val = all(c, "t").map((x) => x.textContent ?? "").join("");
+        else if (t === "inlineStr") val = cellText(first(c, "is") ?? c);
         else if (t === "b") val = v === "1" ? "TRUE" : "FALSE";
         else if (t === "str" || t === "e") val = v;
         else if (v !== "") {

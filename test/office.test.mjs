@@ -461,3 +461,24 @@ test('listZip decodes CP437 filenames when UTF-8 flag is unset while preserving 
 		['Küche.txt', 'Überweisung.pdf', '日本語/', '日本語/Küche.txt'],
 	)
 })
+
+test('readXlsx ignores phonetic furigana <rPh> runs in shared strings and inline strings', async () => {
+	const buf = await makeXlsx({
+		sharedStringsXml:
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">' +
+			'<si><t>東京</t><rPh sb="0" eb="2"><t>トウキョウ</t></rPh><phoneticPr fontId="1"/></si>' +
+			'<si><r><rPr><b/></rPr><t>東</t></r><r><t>京</t></r><rPh sb="0" eb="2"><t>トウキョウ</t></rPh></si>' +
+			'</sst>',
+		sheetXml:
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+			'<row r="1">' +
+			'<c r="A1" t="s"><v>0</v></c>' +
+			'<c r="B1" t="s"><v>1</v></c>' +
+			'<c r="C1" t="inlineStr"><is><t>大阪</t><rPh sb="0" eb="2"><t>オオサカ</t></rPh><phoneticPr fontId="1"/></is></c>' +
+			'</row></sheetData></worksheet>',
+	})
+	const sheets = await readXlsx(buf)
+	assert.deepEqual(sheets[0].rows, [['東京', '東京', '大阪']])
+})
