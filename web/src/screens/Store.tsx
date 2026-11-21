@@ -458,13 +458,15 @@ function StoreSheet({
 					cancelLabel="Back"
 					openTerminal={openTerminal}
 					onInstall={(input) => {
-						action.mutate({
-							path: 'apps.install',
-							input: {appId: app.id, ...input},
-							adding: [...missingDeps.map((d) => all.find((a) => a.id === d)).filter((a): a is StoreApp => !!a), app].map((a) => ({id: a.id, name: a.name, icon: a.icon})),
-							done: `Installing ${app.name}…`,
-						})
-						setReviewing(false)
+						action.mutate(
+							{
+								path: 'apps.install',
+								input: {appId: app.id, ...input},
+								adding: [...missingDeps.map((d) => all.find((a) => a.id === d)).filter((a): a is StoreApp => !!a), app].map((a) => ({id: a.id, name: a.name, icon: a.icon})),
+								done: `Installing ${app.name}…`,
+							},
+							{onSuccess: () => setReviewing(false)},
+						)
 					}}
 					onCancel={() => setReviewing(false)}
 				/>
