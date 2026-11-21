@@ -115,8 +115,14 @@ export function createFiles({home, dataDir}) {
 	const visible = (name) => !name.startsWith('.')
 
 	async function list({path, sortBy = 'name', sortOrder = 'ascending', limit} = {}) {
+		if (path === '/Trash') {
+			const h = await roots()
+			let near = join(h, '.local/share/Trash/files')
+			while (near !== h && near !== dirname(near) && !(await lstat(near).then(() => true, () => false))) near = dirname(near)
+			const nearReal = await realpath(near).catch(() => '')
+			if (nearReal === h || nearReal.startsWith(h + sep)) await mkdir(trashFiles, {recursive: true})
+		}
 		const {real} = await resolve(path)
-		if (path === '/Trash') await mkdir(trashFiles, {recursive: true})
 		const st = await stat(real)
 		if (!st.isDirectory()) throw new RpcError('BAD_REQUEST', '[not-a-directory]')
 		const dirents = (await readdir(real, {withFileTypes: true})).filter((d) => visible(d.name))

@@ -77,3 +77,38 @@ describe('files: #113 favorites return real entry metadata', () => {
 		assert.deepEqual(remaining.map((x) => x.path), ['/Home/Documents'])
 	})
 })
+
+describe('files: #282 opening Trash before anything has been trashed', () => {
+	test('files.list on /Trash creates Trash/files and returns an empty listing', async (t) => {
+		const scratch = await realpath(await mkdtemp(join(os.tmpdir(), 'omarchy-empty-trash-')))
+		t.after(() => rm(scratch, {recursive: true, force: true}))
+		const h = join(scratch, 'home')
+		const d = join(scratch, 'data')
+		await mkdir(h, {recursive: true})
+		await mkdir(d, {recursive: true})
+
+		const f = createFiles({home: h, dataDir: d})
+		const listed = await f.procedures['files.list'].run({path: '/Trash'})
+		assert.equal(listed.path, '/Trash')
+		assert.equal(listed.name, 'Trash')
+		assert.equal(listed.type, 'directory')
+		assert.deepEqual(listed.files, [])
+		assert.equal(listed.totalFiles, 0)
+	})
+
+	test('files.list on /Trash does not follow or create directories through an outside symlink', async (t) => {
+		const scratch = await realpath(await mkdtemp(join(os.tmpdir(), 'omarchy-trash-link-')))
+		t.after(() => rm(scratch, {recursive: true, force: true}))
+		const h = join(scratch, 'home')
+		const d = join(scratch, 'data')
+		const extDir = join(scratch, 'outside')
+		await mkdir(join(h, '.local/share'), {recursive: true})
+		await mkdir(d, {recursive: true})
+		await mkdir(extDir, {recursive: true})
+		await symlink(extDir, join(h, '.local/share/Trash'))
+
+		const f = createFiles({home: h, dataDir: d})
+		await assert.rejects(f.procedures['files.list'].run({path: '/Trash'}), (e) => ['NOT_FOUND', 'FORBIDDEN'].includes(e.code))
+		assert.deepEqual(await readdir(extDir), [])
+	})
+})
