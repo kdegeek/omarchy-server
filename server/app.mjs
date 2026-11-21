@@ -1657,7 +1657,7 @@ export function createApp({store, staticDir, fetchImpl = fetch, secureCookies = 
 					const target = new URL(getClient().baseUrl)
 					target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:'
 					target.pathname = '/connector/ws'
-					const upstream = new WebSocket(target, {headers: {authorization: String(req.headers.authorization ?? '')}, handshakeTimeout: 10_000, maxPayload: 16 * 1024 * 1024})
+					const upstream = new WebSocket(target, {headers: {authorization: String(req.headers.authorization ?? '')}, handshakeTimeout: 10_000, maxPayload: 16 * 1024 * 1024, autoPong: false})
 					upstream.once('unexpected-response', (_q, r) => refuse(`${r.statusCode === 401 ? '401 Unauthorized' : '502 Bad Gateway'}`))
 					upstream.once('error', () => refuse('502 Bad Gateway'))
 					upstream.once('open', () => {
@@ -1665,12 +1665,17 @@ export function createApp({store, staticDir, fetchImpl = fetch, secureCookies = 
 						wss.handleUpgrade(req, socket, head, (client) => {
 							upstream.on('message', (data, isBinary) => client.readyState === WebSocket.OPEN && client.send(data, {binary: isBinary}))
 							client.on('message', (data, isBinary) => upstream.readyState === WebSocket.OPEN && upstream.send(data, {binary: isBinary}))
-							upstream.on('close', () => client.readyState === WebSocket.OPEN && client.close(1000))
+							upstream.on('close', (code) => {
+								if (client.readyState !== WebSocket.OPEN) return
+								if (code === 1006) client.terminate()
+								else client.close(1000)
+							})
 							client.on('close', () => upstream.readyState === WebSocket.OPEN && upstream.close(1000))
 							upstream.on('error', () => client.terminate())
 							client.on('error', () => upstream.terminate())
-							// Keep it open through idle stretches (pings from omarchyd reach the connector).
+							// Keep it open through idle stretches (pings and pongs pass between omarchyd and the connector).
 							upstream.on('ping', (d) => client.readyState === WebSocket.OPEN && client.ping(d))
+							client.on('pong', (d) => upstream.readyState === WebSocket.OPEN && upstream.pong(d))
 						})
 					})
 					return
