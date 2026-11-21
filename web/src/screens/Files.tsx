@@ -27,7 +27,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
-import { batchToastMessage, runFileBatch } from "../filesHelpers";
+import { batchToastMessage, canSubmitNamePrompt, runFileBatch } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -1225,6 +1225,7 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
           initial={prompt.kind === "rename" ? prompt.entry!.name : "New folder"}
           submit={prompt.kind === "folder" ? "Create" : "Rename"}
           selectStem={prompt.kind === "rename" && !isDir(prompt.entry!)}
+          requireChange={prompt.kind === "rename"}
           onClose={() => setPrompt(null)}
           onSubmit={async (name) => {
             if (prompt.kind === "folder")
@@ -1631,6 +1632,7 @@ function NamePrompt({
   initial,
   submit,
   selectStem,
+  requireChange,
   onClose,
   onSubmit,
 }: {
@@ -1638,6 +1640,7 @@ function NamePrompt({
   initial: string;
   submit: string;
   selectStem?: boolean;
+  requireChange?: boolean;
   onClose: () => void;
   onSubmit: (name: string) => Promise<void>;
 }) {
@@ -1651,15 +1654,14 @@ function NamePrompt({
     const dot = initial.lastIndexOf(".");
     el.setSelectionRange(0, selectStem && dot > 0 ? dot : initial.length);
   }, [initial, selectStem]);
-  const valid =
-    name.trim() !== "" && !name.includes("/") && name !== "." && name !== "..";
+  const canSubmit = canSubmitNamePrompt({ name, initial, requireChange, busy });
   return (
     <Sheet open onClose={onClose} label={title}>
       <SheetHeader title={title} onClose={onClose} />
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (!valid) return;
+          if (!canSubmit) return;
           setBusy(true);
           await onSubmit(name.trim()).catch(() => {});
           setBusy(false);
@@ -1681,7 +1683,7 @@ function NamePrompt({
         </div>
         <button
           className="btn primary block"
-          disabled={!valid || busy || name === initial}
+          disabled={!canSubmit}
         >
           {busy && <span className="spinner" />}
           {submit}
