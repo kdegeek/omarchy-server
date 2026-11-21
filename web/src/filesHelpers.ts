@@ -84,4 +84,35 @@ export function shouldActivateRowOnKey(e: {key: string; target: unknown; current
 	return e.key === 'Enter' && e.target === e.currentTarget
 }
 
+/** Label for the share password row across idle, loading, loaded, and failed states. */
+export function sharePasswordLabel({
+	data,
+	isFetching,
+	error,
+}: {
+	data: string | undefined
+	isFetching: boolean
+	error: Error | null | undefined
+}): string {
+	if (data) return data
+	if (isFetching) return '…'
+	if (error) return `${error.message || 'Couldn’t load password'} · Tap to retry`
+	return 'Tap to show'
+}
+
+/** Decide what tapping the share password row should do next. */
+export function sharePasswordAction({
+	data,
+	reveal,
+	isFetching,
+}: {
+	data: string | undefined
+	reveal: boolean
+	isFetching?: boolean
+}): 'copy' | 'noop' | 'refetch' | 'reveal' {
+	if (data) return 'copy'
+	if (isFetching) return 'noop'
+	return reveal ? 'refetch' : 'reveal'
+}
+
 export type {FileEntry}

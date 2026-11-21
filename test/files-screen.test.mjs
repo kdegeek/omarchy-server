@@ -202,3 +202,34 @@ describe('files screen: #195 ShareSheet access radios stay mounted and grouped',
 		assert.equal(matches.length, 2)
 	})
 })
+
+describe('files screen: #196 ShareSheet password error and retry', () => {
+	test('sharePasswordLabel shows Tap to show, loading ellipsis, password, or error with retry hint', () => {
+		assert.equal(helpers.sharePasswordLabel({data: undefined, isFetching: false, error: null}), 'Tap to show')
+		assert.equal(helpers.sharePasswordLabel({data: undefined, isFetching: true, error: new Error('old')}), '…')
+		assert.equal(helpers.sharePasswordLabel({data: 's3cr3t', isFetching: false, error: null}), 's3cr3t')
+		assert.equal(
+			helpers.sharePasswordLabel({data: undefined, isFetching: false, error: new Error('Helper unavailable')}),
+			'Helper unavailable · Tap to retry',
+		)
+		assert.equal(
+			helpers.sharePasswordLabel({data: undefined, isFetching: false, error: new Error('')}),
+			'Couldn’t load password · Tap to retry',
+		)
+	})
+
+	test('sharePasswordAction copies when loaded, refetches when already revealed, and reveals first time', () => {
+		assert.equal(helpers.sharePasswordAction({data: 'pw', reveal: true}), 'copy')
+		assert.equal(helpers.sharePasswordAction({data: undefined, reveal: true, isFetching: false}), 'refetch')
+		assert.equal(helpers.sharePasswordAction({data: undefined, reveal: true, isFetching: true}), 'noop')
+		assert.equal(helpers.sharePasswordAction({data: undefined, reveal: false, isFetching: false}), 'reveal')
+	})
+
+	test('Files.tsx uses sharePasswordAction, pw.refetch(), and sharePasswordLabel in ShareSheet', async () => {
+		const src = await filesSource()
+		assert.match(src, /sharePasswordAction\(\{ data: pw\.data, reveal, isFetching: pw\.isFetching \}\)/)
+		assert.match(src, /!pw\.data && pw\.error && !pw\.isFetching/)
+		assert.match(src, /pw\.refetch\(\)/)
+		assert.match(src, /sharePasswordLabel\(\{ data: pw\.data, isFetching: pw\.isFetching, error: pw\.error \}\)/)
+	})
+})

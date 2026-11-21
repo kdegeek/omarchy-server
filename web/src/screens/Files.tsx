@@ -28,7 +28,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
-import { batchToastMessage, canSubmitNamePrompt, type FavoriteItem, favoritePath, nextSearchSelection, runFileBatch, shouldActivateRowOnKey } from "../filesHelpers";
+import { batchToastMessage, canSubmitNamePrompt, type FavoriteItem, favoritePath, nextSearchSelection, runFileBatch, sharePasswordAction, sharePasswordLabel, shouldActivateRowOnKey } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -2074,9 +2074,23 @@ export function ShareSheet({
               </button>
             )}
             {share.password && (
-              <button className="row" style={{ minHeight: 56 }} onClick={() => (pw.data ? copy(pw.data, "Password") : setReveal(true))}>
+              <button
+                className="row"
+                style={{ minHeight: 56 }}
+                onClick={() => {
+                  const action = sharePasswordAction({ data: pw.data, reveal, isFetching: pw.isFetching });
+                  if (action === "copy") copy(pw.data!, "Password");
+                  else if (action === "refetch") void pw.refetch();
+                  else if (action === "reveal") setReveal(true);
+                }}
+              >
                 <span className="k">Password</span>
-                <span className="v mono" style={{ fontSize: 12.5 }}>{pw.data ?? (pw.isFetching ? "…" : "Tap to show")}</span>
+                <span
+                  className={!pw.data && pw.error && !pw.isFetching ? "v" : "v mono"}
+                  style={{ fontSize: 12.5, ...(!pw.data && pw.error && !pw.isFetching ? { color: "var(--red)" } : {}) }}
+                >
+                  {sharePasswordLabel({ data: pw.data, isFetching: pw.isFetching, error: pw.error })}
+                </span>
               </button>
             )}
           </div>
