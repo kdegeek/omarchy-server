@@ -73,3 +73,27 @@ test('store manifest YAML syntax error falls back to repository name instead of 
 	assert.equal(reg[0].meta.name, 'My Cool Store')
 	assert.deepEqual(reg[0].apps.map((a) => a.id).sort(), ['one', 'two'])
 })
+
+test('store apps with purely numeric ids are listed as string ids', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'appstore-listings-128-')))
+	t.after(() => rm(root, {recursive: true, force: true}))
+
+	const store = await initStore(root, 'numeric-ids', [
+		{folder: '2048', yml: 'manifestVersion: 1\nid: 2048\nname: 2048\nport: 31001\n'},
+		{folder: 'demo-app', yml: 'manifestVersion: 1\nid: demo-app\nname: Demo App\nport: 31002\ndependencies:\n  - 2048\n'},
+		{folder: 'bad-arr', yml: 'manifestVersion: 1\nid:\n  - 2048\nname: Bad\nport: 31003\n'},
+	])
+	const run = async (cmd, args, opts = {}) => (cmd === 'git' ? execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString() : '')
+	const apps = createApps({dataDir: join(root, 'data'), home: join(root, 'home'), allowFileStores: true, defaultStores: [{url: store.url}], systemApps: null, run})
+	t.after(() => apps.close())
+
+	const reg = await apps.procedures['appStore.registry'].run()
+	assert.deepEqual(reg[0].apps.map((a) => a.id).sort(), ['2048', 'demo-app'])
+	const app2048 = reg[0].apps.find((a) => a.id === '2048')
+	assert.equal(typeof app2048.id, 'string')
+	const demo = reg[0].apps.find((a) => a.id === 'demo-app')
+	assert.deepEqual(demo.dependencies, ['2048'])
+	assert.deepEqual(demo.needs, ['2048'])
+	const detail = await apps.procedures['appStore.app'].run({appId: '2048'})
+	assert.equal(detail.id, '2048')
+})

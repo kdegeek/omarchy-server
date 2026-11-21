@@ -412,7 +412,7 @@ function toDetail(a) {
 
 // Turn a store compose file into what omarchyd runs: no app_proxy, the web service published on
 // 127.0.0.1 only. Returns the compose text and where the gateway should forward to.
-const stringList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [])
+const stringList = (v) => (Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : typeof x === 'number' && Number.isFinite(x) ? String(x) : null)).filter(Boolean) : [])
 // The apps `id` needs, dependencies first (a depth-first post-order).
 function orderNeeds(id, byId, seen = new Set(), out = []) {
 	for (const d of stringList(byId.get(id)?.a.dependencies)) {
@@ -950,10 +950,12 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 			await mapPool(entries, LOAD_CONCURRENCY, async (entry) => {
 				const appPath = join(dir, entry.name)
 				const [m, c, exportsText] = await Promise.all([readYaml(appPath, APP_FILES).catch(() => null), readFirst(appPath, COMPOSE_FILES).catch(() => null), readFile(join(appPath, 'exports.sh'), 'utf8').catch(() => '')])
-				if (!m?.data?.id || m.data.id !== entry.name || !APP_ID.test(m.data.id) || !c) return null
+				const rawId = m?.data?.id
+				const id = typeof rawId === 'string' || (typeof rawId === 'number' && Number.isFinite(rawId)) ? String(rawId) : ''
+				if (!id || id !== entry.name || !APP_ID.test(id) || !c) return null
 				// `export NAME=…`, a bare `export NAME`, or one written out for later (echo "export NAME=…" >> .env).
 				const exported = [...exportsText.matchAll(/\bexport\s+([A-Za-z_][A-Za-z0-9_]*)\b/g)].map((x) => x[1])
-				return {a: m.data, entry, compose: c.text, exported}
+				return {a: {...m.data, id}, entry, compose: c.text, exported}
 			})
 		).filter(Boolean)
 		const byId = new Map(found.map((f) => [f.a.id, f]))
