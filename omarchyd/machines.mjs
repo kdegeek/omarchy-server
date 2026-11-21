@@ -634,6 +634,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		await ready
 		const m = find(input?.id)
 		if (isBusy(m.id)) throw new RpcError('CONFLICT', `${m.name} is busy`)
+		let defined = false
 		if (m.state === 'error') {
 			// If setup got as far as this machine's own disk, Start finishes it: define again and boot.
 			// A failed copy still names the source machine's files, and those must not be booted.
@@ -641,6 +642,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			const ownDisks = (m.layout?.disks ?? []).every((d) => d.device !== 'disk' || !d.file || d.file.startsWith(own))
 			if (pending !== 'starting' || !ownDisks || !(await exists(join(vmsDir, m.id, 'disk.qcow2')))) throw new RpcError('PRECONDITION_FAILED', `${m.name} didn’t finish setting up. Delete it and create it again.`)
 			await define(m)
+			defined = true
 			delete m.state
 			delete m.errorMessage
 			await save()
@@ -656,8 +658,12 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 					if (Date.now() > end) throw new Error(`${m.name} didn’t shut down within 3 minutes; use Stop, then Start`)
 					await new Promise((r) => setTimeout(r, 1000))
 				}
+				await define(m)
 				await virsh('start', domain(m.id))
-			} else await virsh(...verb(domain(m.id)))
+			} else {
+				if (pending === 'starting' && !defined) await define(m)
+				await virsh(...verb(domain(m.id)))
+			}
 			if (pending === 'starting' || pending === 'restarting') {
 				delete m.pending
 				delete m.hibernated

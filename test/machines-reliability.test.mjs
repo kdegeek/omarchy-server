@@ -288,6 +288,80 @@ test('#659: tasks left running when omarchyd restarted are marked error on start
 	assert.equal(saved.machines[0].tasks.find((x) => x.id === 't2').status, 'error')
 })
 
+test('#663: Start and pending Restart redefine the domain so missing definitions and KVM changes take effect', async (t) => {
+	const id = 'a1b2c3d4'
+	const errId = 'e1e2e3e4'
+	const doms = new Map()
+	const definedXml = []
+	const definedFor = []
+	const env = await makeEnv(t, {
+		kvm: false,
+		run: async (cmd, args) => {
+			if (cmd !== 'virsh') return ''
+			const a = args[0] === '-c' ? args.slice(2) : args
+			if (a[0] === 'list') {
+				return ` Id   Name   State\n------------------\n${[...doms].map(([n, s]) => ` -    ${n}   ${s}`).join('\n')}\n`
+			}
+			if (a[0] === 'define') {
+				const xmlText = await readFile(a[1], 'utf8')
+				definedXml.push(xmlText)
+				const name = /<name>(.+?)<\/name>/.exec(xmlText)[1]
+				definedFor.push(name)
+				if (!doms.has(name)) doms.set(name, 'shut off')
+				return ''
+			}
+			if (a[0] === 'start') {
+				if (!doms.has(a[1])) throw new Error(`virsh start: error: failed to get domain '${a[1]}'`)
+				doms.set(a[1], 'running')
+				return ''
+			}
+			if (a[0] === 'shutdown' || a[0] === 'destroy') {
+				doms.set(a[1], 'shut off')
+				return ''
+			}
+			return ''
+		},
+	})
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	const errDir = join(env.dataDir, 'machines', 'vms', errId)
+	await mkdir(vmDir, {recursive: true})
+	await mkdir(errDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	await writeFile(join(errDir, 'disk.qcow2'), 'd1')
+	const rec = makeMachineRecord(env.dataDir, {id, vmid: 100, name: 'Box'})
+	const errRec = makeMachineRecord(env.dataDir, {id: errId, vmid: 101, name: 'Recover', state: 'error', errorMessage: 'define failed'})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec, errRec]}))
+
+	const m = env.open()
+	await m.ready
+
+	// 1. Missing domain in libvirt is defined on Start before virsh start.
+	assert.equal(await m.procedures['machines.start'].run({id}), true)
+	assert.equal(doms.get(`omarchy-${id}`), 'running')
+	assert.match(definedXml.at(-1), /<domain type='qemu'>/)
+
+	// 2. Stale KVM setting updates to kvm on next Start once /dev/kvm becomes available.
+	await m.procedures['machines.forceStop'].run({id})
+	await m.procedures['machines.updateOptions'].run({id, notes: 'while no kvm'})
+	assert.match(definedXml.at(-1), /<domain type='qemu'>/)
+	await writeFile(env.kvmDevice, '')
+	await m.procedures['machines.start'].run({id})
+	assert.match(definedXml.at(-1), /<domain type='kvm'>/)
+
+	// 3. Pending Restart also redefines before virsh start.
+	await m.procedures['machines.updateOptions'].run({id, agent: true})
+	const beforeRestart = definedXml.length
+	await m.procedures['machines.restart'].run({id})
+	assert.equal(definedXml.length, beforeRestart + 1)
+	assert.match(definedXml.at(-1), /<domain type='kvm'>/)
+
+	// 4. Error machine with own disk defines exactly once on Start.
+	const errBefore = definedFor.filter((n) => n === `omarchy-${errId}`).length
+	await m.procedures['machines.start'].run({id: errId})
+	assert.equal(definedFor.filter((n) => n === `omarchy-${errId}`).length, errBefore + 1)
+})
+
+
 
 
 
