@@ -629,24 +629,62 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		// read the tree you sync, the same way Software update reads the local omarchy-server clone.
 		const localDefault = defaultStores.find((d) => /^file:\/\//.test(d.url))
 		if (localDefault) {
+			const localUrl = normalize(localDefault.url)
 			let changed = false
 			for (const s of state.stores) {
-				if (!isGithubAppStore(s.url)) continue
-				await rm(storeDir(s.url), {recursive: true, force: true}).catch(() => {})
-				s.url = localDefault.url
-				s.syncedAt = 0
-				changed = true
+				if (isGithubAppStore(s.url) || (s.localDefault && s.url.toLowerCase() !== localUrl.toLowerCase())) {
+					const oldUrl = s.url
+					await rm(storeDir(oldUrl), {recursive: true, force: true}).catch(() => {})
+					s.url = localUrl
+					s.syncedAt = 0
+					s.localDefault = true
+					delete s.meta
+					for (const a of state.apps) if (a.store?.toLowerCase() === oldUrl.toLowerCase()) a.store = localUrl
+					changed = true
+				} else if (s.url.toLowerCase() === localUrl.toLowerCase() && !s.localDefault) {
+					s.localDefault = true
+					changed = true
+				}
 			}
 			for (const a of state.apps) {
 				if (!isGithubAppStore(a.store)) continue
-				a.store = localDefault.url
+				a.store = localUrl
 				changed = true
 			}
-			if (!state.stores.some((s) => s.url.toLowerCase() === localDefault.url.toLowerCase())) {
-				state.stores.unshift({url: localDefault.url, syncedAt: 0})
+			if (!state.stores.some((s) => s.url.toLowerCase() === localUrl.toLowerCase())) {
+				state.stores.unshift({url: localUrl, syncedAt: 0, localDefault: true})
 				changed = true
 			}
 			if (changed) await save()
+		} else {
+			const githubDefault = defaultStores.find((d) => isGithubAppStore(d.url))
+			if (githubDefault) {
+				const ghUrl = normalize(githubDefault.url)
+				let changed = false
+				const keep = []
+				for (const s of state.stores) {
+					const wasLocal = s.localDefault || (!allowFileStores && /^file:\/\//.test(s.url))
+					if (!wasLocal) {
+						keep.push(s)
+						continue
+					}
+					const oldUrl = s.url
+					await rm(storeDir(oldUrl), {recursive: true, force: true}).catch(() => {})
+					for (const a of state.apps) if (a.store?.toLowerCase() === oldUrl.toLowerCase()) a.store = ghUrl
+					if (!keep.some((x) => isGithubAppStore(x.url)) && !state.stores.some((x) => x !== s && isGithubAppStore(x.url))) {
+						s.url = ghUrl
+						s.syncedAt = 0
+						delete s.localDefault
+						delete s.meta
+						keep.push(s)
+					}
+					changed = true
+				}
+				if (changed) {
+					state.stores = keep
+					await save()
+				}
+			}
 		}
 		for (const a of state.apps) if (a.state === 'installing') Object.assign(a, {state: 'error', error: 'Install was interrupted. Uninstall it and install again.'})
 		// Newer versions ask about more kinds of access (host network, server folders, system access).
@@ -2144,7 +2182,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 						await rm(storeDir(url), {recursive: true, force: true})
 						throw e
 					}
-					state.stores.push({url, meta: loaded.meta, syncedAt: Date.now()})
+					state.stores.push({url, meta: loaded.meta, syncedAt: Date.now(), ...(localDefault && url.toLowerCase() === normalize(localDefault.url).toLowerCase() ? {localDefault: true} : {})})
 					registryCache = null
 					await save()
 					return true
