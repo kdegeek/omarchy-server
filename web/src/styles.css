@@ -7763,6 +7763,9 @@ html.page-locked .auth {
 	max-height: 50vh;
 	overflow: auto;
 }
+.hypr-launcher li {
+	scroll-margin-block: 8px;
+}
 .hypr-launcher button {
 	width: 100%;
 	display: flex;
