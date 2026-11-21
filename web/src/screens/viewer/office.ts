@@ -53,12 +53,70 @@ const colIndex = (ref: string) => {
   return n - 1;
 };
 const DATE_IDS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47]);
-function excelDate(serial: number, withTime: boolean) {
+const DATETIME_IDS = new Set([18, 19, 20, 21, 22, 45, 47]);
+export type ExcelFormatKind = "date" | "datetime" | "dur-hm" | "dur-hms" | "dur-ms" | "dur-m" | "dur-s";
+
+function firstFormatSection(raw: string): string {
+  let inQuotes = false;
+  let escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && !inQuotes) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === ";" && !inQuotes) return raw.slice(0, i);
+  }
+  return raw;
+}
+
+function stripFormatLiterals(section: string): string {
+  return section.replace(/"[^"]*"|\\.|_.|\*./g, "");
+}
+
+export function classifyExcelFormat(numFmtId: number, formatCode?: string): ExcelFormatKind | null {
+  if (formatCode !== undefined) {
+    const noLit = stripFormatLiterals(firstFormatSection(formatCode));
+    const code = noLit.replace(/\[[^\]]*\]/g, "");
+    if (/\[h+\]/i.test(noLit)) return /s/i.test(code) ? "dur-hms" : "dur-hm";
+    if (/\[m+\]/i.test(noLit)) return /s/i.test(code) ? "dur-ms" : "dur-m";
+    if (/\[s+\]/i.test(noLit)) return "dur-s";
+    const isDate = /[dmy]/i.test(code) && !/^[#0.,%\s]*$/.test(code);
+    return isDate ? (/[hs]/i.test(code) ? "datetime" : "date") : null;
+  }
+  if (numFmtId === 46) return "dur-hms";
+  if (!DATE_IDS.has(numFmtId)) return null;
+  return DATETIME_IDS.has(numFmtId) ? "datetime" : "date";
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+export function formatExcelSerial(serial: number, kind: ExcelFormatKind): string {
+  if (!Number.isFinite(serial)) return String(serial);
+  if (kind.startsWith("dur-")) {
+    const totalSec = Math.round(Math.abs(serial) * 86400);
+    const sign = serial < 0 && totalSec > 0 ? "-" : "";
+    if (kind === "dur-s") return `${sign}${totalSec}`;
+    if (kind === "dur-m") return `${sign}${Math.floor(totalSec / 60)}`;
+    if (kind === "dur-ms") return `${sign}${Math.floor(totalSec / 60)}:${pad2(totalSec % 60)}`;
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return kind === "dur-hms" ? `${sign}${h}:${pad2(m)}:${pad2(s)}` : `${sign}${h}:${pad2(m)}`;
+  }
   const d = new Date(Math.round((serial - 25569) * 86400 * 1000));
   if (Number.isNaN(d.getTime())) return String(serial);
   const iso = d.toISOString();
   const day = iso.slice(0, 10);
-  if (!withTime) return day;
+  if (kind === "date") return day;
   const time = iso.slice(11, 16);
   return serial < 1 ? time : `${day} ${time}`;
 }
@@ -77,8 +135,8 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
   const shared: string[] = [];
   const sst = await read(zip, "xl/sharedStrings.xml");
   if (sst) for (const si of all(xml(sst), "si")) shared.push(all(si, "t").map((t) => t.textContent ?? "").join(""));
-  // Which number formats are dates.
-  const dateStyles: (null | "date" | "datetime")[] = [];
+  // Which number formats are dates or durations.
+  const dateStyles: (ExcelFormatKind | null)[] = [];
   const st = await read(zip, "xl/styles.xml");
   if (st) {
     const doc = xml(st);
@@ -88,9 +146,7 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
     if (xfs)
       for (const xf of kids(xfs, "xf")) {
         const id = Number(xf.getAttribute("numFmtId") ?? 0);
-        const code = (custom.get(id) ?? "").replace(/"[^"]*"|\[[^\]]*\]|\\./g, "");
-        const isDate = DATE_IDS.has(id) || (custom.has(id) && /[dmy]/i.test(code) && !/^[#0.,%\s]*$/.test(code));
-        dateStyles.push(isDate ? (/[hs]/i.test(code) || [18, 19, 20, 21, 22, 45, 46, 47].includes(id) ? "datetime" : "date") : null);
+        dateStyles.push(classifyExcelFormat(id, custom.get(id)));
       }
   }
   const sheets: Sheet[] = [];
@@ -122,7 +178,7 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
         else if (t === "str" || t === "e") val = v;
         else if (v !== "") {
           const ds = dateStyles[Number(c.getAttribute("s") ?? -1)];
-          val = ds ? excelDate(Number(v), ds === "datetime") : cleanNum(v);
+          val = ds ? formatExcelSerial(Number(v), ds) : cleanNum(v);
         }
         out[ci] = val;
       });
