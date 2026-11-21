@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {after, before, test} from 'node:test'
 import JSZip from 'jszip'
 
-import {cleanNum, listZip, readXlsx} from '../web/src/screens/viewer/office.ts'
+import {cleanNum, decodeCp437, listZip, readXlsx} from '../web/src/screens/viewer/office.ts'
 
 const unescapeXml = (s) =>
 	s.replace(/&(#x[0-9a-fA-F]+|#\d+|lt|gt|amp|quot|apos);/g, (_, e) => {
@@ -406,4 +406,58 @@ test('listZip keeps folder entries contiguous when folder names differ only by c
 		}
 	}
 	for (const d of ['a/', 'A/', 'Docs/', 'docs/', 'foo/', 'foo-bar/']) assertContiguous(d)
+})
+
+function makeRawStoredZip(items) {
+	const locals = []
+	const cds = []
+	let offset = 0
+	for (const {nameBytes, flags} of items) {
+		const lh = Buffer.alloc(30 + nameBytes.length)
+		lh.writeUInt32LE(0x04034b50, 0)
+		lh.writeUInt16LE(20, 4)
+		lh.writeUInt16LE(flags, 6)
+		lh.writeUInt16LE(0x5421, 12)
+		lh.writeUInt16LE(nameBytes.length, 26)
+		Buffer.from(nameBytes).copy(lh, 30)
+		locals.push(lh)
+
+		const cd = Buffer.alloc(46 + nameBytes.length)
+		cd.writeUInt32LE(0x02014b50, 0)
+		cd.writeUInt16LE(20, 4)
+		cd.writeUInt16LE(20, 6)
+		cd.writeUInt16LE(flags, 8)
+		cd.writeUInt16LE(0x5421, 14)
+		cd.writeUInt16LE(nameBytes.length, 28)
+		cd.writeUInt32LE(offset, 42)
+		Buffer.from(nameBytes).copy(cd, 46)
+		cds.push(cd)
+		offset += lh.length
+	}
+	const cdBuf = Buffer.concat(cds)
+	const eocd = Buffer.alloc(22)
+	eocd.writeUInt32LE(0x06054b50, 0)
+	eocd.writeUInt16LE(items.length, 8)
+	eocd.writeUInt16LE(items.length, 10)
+	eocd.writeUInt32LE(cdBuf.length, 12)
+	eocd.writeUInt32LE(offset, 16)
+	const all = Buffer.concat([...locals, cdBuf, eocd])
+	return all.buffer.slice(all.byteOffset, all.byteOffset + all.byteLength)
+}
+
+test('listZip decodes CP437 filenames when UTF-8 flag is unset while preserving UTF-8 entries', async () => {
+	assert.equal(decodeCp437(new Uint8Array([0x4b, 0x81, 0x63, 0x68, 0x65, 0x2e, 0x74, 0x78, 0x74])), 'Küche.txt')
+	assert.equal(decodeCp437(new Uint8Array([0x9a, 0x62, 0x65, 0x72, 0x77, 0x65, 0x69, 0x73, 0x75, 0x6e, 0x67, 0x2e, 0x70, 0x64, 0x66])), 'Überweisung.pdf')
+	assert.equal(decodeCp437(new Uint8Array([0x41, 0x80, 0xff])), 'AÇ\u00a0')
+
+	const buf = makeRawStoredZip([
+		{nameBytes: new Uint8Array([0x4b, 0x81, 0x63, 0x68, 0x65, 0x2e, 0x74, 0x78, 0x74]), flags: 0x0000},
+		{nameBytes: new Uint8Array([0x9a, 0x62, 0x65, 0x72, 0x77, 0x65, 0x69, 0x73, 0x75, 0x6e, 0x67, 0x2e, 0x70, 0x64, 0x66]), flags: 0x0000},
+		{nameBytes: new TextEncoder().encode('日本語/Küche.txt'), flags: 0x0800},
+	])
+	const entries = await listZip(buf)
+	assert.deepEqual(
+		entries.map((e) => e.name),
+		['Küche.txt', 'Überweisung.pdf', '日本語/', '日本語/Küche.txt'],
+	)
 })
