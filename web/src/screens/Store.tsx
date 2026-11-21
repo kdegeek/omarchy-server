@@ -59,8 +59,9 @@ export function Store({onOpenInstalled, onBack, onTerminal}: {onOpenInstalled: (
 	// Stores are checked for new apps every hour; this checks now.
 	const refresh = useMutation({
 		mutationFn: () => mutate<number>('appStore.refresh'),
-		onSuccess: async () => (await qc.invalidateQueries({queryKey: ['appStore.registry']}), toast('Up to date')),
+		onSuccess: () => toast('Up to date'),
 		onError: (e) => toast((e as Error).message, true),
+		onSettled: () => qc.invalidateQueries({queryKey: ['appStore.registry']}),
 	})
 
 	const all = useMemo(() => {

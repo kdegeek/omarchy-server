@@ -1047,6 +1047,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		const snapshot = [...state.stores]
 		const stillAdded = (url) => state.stores.some((x) => x.url.toLowerCase() === url.toLowerCase())
 		const list = []
+		const failures = []
 		let dirty = false
 		let hadFailure = false
 		for (const s of snapshot) {
@@ -1060,12 +1061,15 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 					}
 					s.syncedAt = Date.now()
 					dirty = true
-				} catch {
+				} catch (error) {
 					if (!stillAdded(s.url)) {
 						await rm(storeDir(s.url), {recursive: true, force: true}).catch(() => {})
 						continue
 					}
 					hadFailure = true
+					const name = s.meta?.name ?? s.name ?? (s.url.replace(/\.git$/, '').split('/').pop() || s.url)
+					const detail = String(error?.message ?? error).trim().split('\n').filter(Boolean).pop()?.slice(0, 200) ?? ''
+					failures.push({name, detail})
 				}
 			}
 			if (!stillAdded(s.url)) continue
@@ -1104,21 +1108,29 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 			else delete app.internalHttps
 		}
 		if (dirty) await save()
-		if (storesGen === gen && !hadFailure) registryCache = {at: Date.now(), list: current}
-		return current
+		if (storesGen === gen) registryCache = hadFailure ? null : {at: Date.now(), list: current}
+		return {list: current, failures}
 	}
-	async function registry({refresh = false} = {}) {
+	async function registry({refresh = false, strict = false} = {}) {
 		await ready
 		if (registryCache && !refresh && Date.now() - registryCache.at < 60 * 60_000) return registryCache.list
+		let promise
 		if (registryInFlight && registryInFlight.gen === storesGen && (!refresh || registryInFlight.refresh)) {
-			return registryInFlight.promise
+			promise = registryInFlight.promise
+		} else {
+			const gen = storesGen
+			promise = loadRegistry({refresh, gen}).finally(() => {
+				if (registryInFlight?.promise === promise) registryInFlight = null
+			})
+			registryInFlight = {gen, refresh, promise}
 		}
-		const gen = storesGen
-		const promise = loadRegistry({refresh, gen}).finally(() => {
-			if (registryInFlight?.promise === promise) registryInFlight = null
-		})
-		registryInFlight = {gen, refresh, promise}
-		return promise
+		const {list, failures} = await promise
+		if (strict && failures.length) {
+			const names = failures.map((f) => f.name).join(', ')
+			const detail = failures[0].detail
+			throw new RpcError('BAD_GATEWAY', detail ? `Couldn’t reach ${names}: ${detail}` : `Couldn’t reach ${names}`)
+		}
+		return list
 	}
 	// An app's listing. An installed app stays with the store it came from (two stores can list the
 	// same id with different folders and settings, and an update must never switch between them).
@@ -2207,7 +2219,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 				},
 			},
 			// "Check for new apps": download every store's latest listings now instead of waiting for the hourly check.
-			'appStore.refresh': {kind: 'mutation', run: async () => ((await registry({refresh: true})).reduce((n, s) => n + s.apps.length, 0))},
+			'appStore.refresh': {kind: 'mutation', run: async () => (await registry({refresh: true, strict: true})).reduce((n, s) => n + s.apps.length, 0)},
 			'appStore.repositories': {kind: 'query', run: async () => (await ready, state.stores.map(({url, meta, name}) => ({url, meta: meta ?? {id: url, name: name ?? url.split('/').pop()}})))},
 			'appStore.addRepository': {
 				kind: 'mutation',

@@ -242,3 +242,58 @@ test('failed first store sync is not cached for an hour so retrying online succe
 	assert.equal(cached.length, 1)
 	assert.equal(gitCalls, 2)
 })
+
+test('appStore.refresh reports store download errors instead of succeeding silently', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'appstore-refresh-err-')))
+	t.after(() => rm(root, {recursive: true, force: true}))
+
+	const storeA = await makeStore(root, 'store-a', [{id: 'one', port: 31001}])
+	const storeB = await makeStore(root, 'store-b', [{id: 'two', port: 31002}])
+	const data = join(root, 'data')
+	const dirB = join(data, 'apps', 'stores', storeFolderName(storeB.url))
+
+	let failAll = false
+	let failB = false
+	const run = async (cmd, args, opts = {}) => {
+		if (cmd === 'git') {
+			if (failAll) throw new Error('git: fatal: unable to access https://example.test: Could not resolve host')
+			if (failB && args[0] === '-C' && args[1] === dirB) throw new Error('git: fatal: unable to access store-b: Could not resolve host')
+			return execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString()
+		}
+		return ''
+	}
+
+	const apps = createApps({dataDir: data, home: join(root, 'home'), allowFileStores: true, defaultStores: [], systemApps: null, run})
+	t.after(() => apps.close())
+
+	await apps.procedures['appStore.addRepository'].run({url: storeA.url})
+	await apps.procedures['appStore.addRepository'].run({url: storeB.url})
+	assert.equal(await apps.procedures['appStore.refresh'].run(), 2)
+
+	const before = JSON.parse(await readFile(join(data, 'apps', 'apps.json'), 'utf8'))
+	const syncedBefore = before.stores.map((s) => s.syncedAt)
+
+	failAll = true
+	await assert.rejects(
+		apps.procedures['appStore.refresh'].run(),
+		(e) => e.code === 'BAD_GATEWAY' && /Couldn’t reach .*store-a.*store-b.*Could not resolve host/.test(e.message),
+	)
+	const after = JSON.parse(await readFile(join(data, 'apps', 'apps.json'), 'utf8'))
+	assert.deepEqual(after.stores.map((s) => s.syncedAt), syncedBefore)
+
+	failAll = false
+	failB = true
+	await mkdir(join(storeA.work, 'newbie'), {recursive: true})
+	await writeFile(join(storeA.work, 'newbie', 'omarchy-app.yml'), 'manifestVersion: 1\nid: newbie\nname: newbie\nversion: "1.0"\nport: 31003\n')
+	await writeFile(join(storeA.work, 'newbie', 'docker-compose.yml'), 'services:\n  web:\n    image: nginx\n')
+	git(storeA.work, 'add', '-A')
+	git(storeA.work, 'commit', '-qm', 'newbie')
+	git(storeA.work, 'push', '-q', 'origin', 'HEAD:main')
+
+	await assert.rejects(
+		apps.procedures['appStore.refresh'].run(),
+		(e) => e.code === 'BAD_GATEWAY' && /Couldn’t reach store-b: .*Could not resolve host/.test(e.message),
+	)
+	const reg = await apps.procedures['appStore.registry'].run()
+	assert.deepEqual(reg[0].apps.map((a) => a.id).sort(), ['newbie', 'one'])
+})
