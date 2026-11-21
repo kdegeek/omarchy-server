@@ -108,3 +108,24 @@ test('migrates a legacy local-store entry back to GitHub while keeping extra com
 	assert.deepEqual(saved.stores.map((s) => s.url), [DEFAULT_STORES[0].url, extra])
 	assert.equal(saved.apps[0].store, DEFAULT_STORES[0].url)
 })
+
+test('appStore.repositories marks a local default store as replacing TouchWorkStation, not manual file stores', async (t) => {
+	const dataLocal = join(root, 'repos-local')
+	await mkdir(join(dataLocal, 'apps'), {recursive: true})
+	const local = `file://${join(root, 'app-store')}`
+	const localApps = createApps({dataDir: dataLocal, home: join(root, 'home'), run: async () => '', defaultStores: [{url: local}]})
+	t.after(() => localApps.close())
+	const localRepos = await localApps.procedures['appStore.repositories'].run()
+	assert.equal(localRepos[0].replaces, DEFAULT_STORES[0].url)
+
+	const dataManual = join(root, 'repos-manual')
+	await mkdir(join(dataManual, 'apps'), {recursive: true})
+	await writeFile(
+		join(dataManual, 'apps', 'apps.json'),
+		JSON.stringify({defaultsAdded: true, umbrelStoreRemoved: true, stores: [{url: local, meta: {id: 'local', name: 'Local'}}], apps: []}),
+	)
+	const manualApps = createApps({dataDir: dataManual, home: join(root, 'home'), allowFileStores: true, run: async () => '', defaultStores: []})
+	t.after(() => manualApps.close())
+	const manualRepos = await manualApps.procedures['appStore.repositories'].run()
+	assert.equal('replaces' in manualRepos[0], false)
+})

@@ -10,6 +10,7 @@ import {explainProbe, openApp} from '../openApp'
 import {Icon, hasIcon} from '../icons'
 import {AppIcon, Sheet, SheetHeader, StatusPill, appStatus, bytes, haptic, isAppBusy, useToast} from '../ui'
 import {SearchField} from './Apps'
+import {remainingSuggestedStores, type StoreRepo} from '../storeSuggestions'
 
 type StoreApp = RegistryApp & {compatible?: boolean; repo?: string; unsupported?: string}
 
@@ -217,13 +218,10 @@ const SUGGESTED_STORES = [
 		blurb: 'Google Chrome and Brave browsers that run on your server and stream to any device.',
 	},
 ]
-type Repo = {url: string; meta: {id: string; name: string}}
-const sameRepo = (a: string, b: string) => a.replace(/\.git$|\/$/, '').toLowerCase() === b.replace(/\.git$|\/$/, '').toLowerCase()
-
 function CommunityStores({owner, onClose}: {owner: boolean; onClose: () => void}) {
 	const qc = useQueryClient()
 	const toast = useToast()
-	const repos = useQuery({queryKey: ['appStore.repositories'], queryFn: () => query<Repo[]>('appStore.repositories')})
+	const repos = useQuery({queryKey: ['appStore.repositories'], queryFn: () => query<StoreRepo[]>('appStore.repositories')})
 	const [url, setUrl] = useState('')
 	const [removing, setRemoving] = useState<string | null>(null)
 	const refresh = () => {
@@ -249,7 +247,7 @@ function CommunityStores({owner, onClose}: {owner: boolean; onClose: () => void}
 		onError: (e) => toast((e as Error).message, true),
 	})
 	const community = repos.data ?? []
-	const suggestions = SUGGESTED_STORES.filter((s) => !(repos.data ?? []).some((r) => sameRepo(r.url, s.url)))
+	const suggestions = remainingSuggestedStores(SUGGESTED_STORES, repos.data ?? [])
 	const valid = /^https:\/\/[\w.-]+\/[\w.\-/]+$/.test(url.trim())
 	return (
 		<Sheet open onClose={onClose} label="Community app stores">

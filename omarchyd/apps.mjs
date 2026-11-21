@@ -2226,7 +2226,19 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 			},
 			// "Check for new apps": download every store's latest listings now instead of waiting for the hourly check.
 			'appStore.refresh': {kind: 'mutation', run: async () => (await registry({refresh: true, strict: true})).reduce((n, s) => n + s.apps.length, 0)},
-			'appStore.repositories': {kind: 'query', run: async () => (await ready, state.stores.map(({url, meta, name}) => ({url, meta: meta ?? {id: url, name: name ?? url.split('/').pop()}})))},
+			'appStore.repositories': {
+				kind: 'query',
+				run: async () => {
+					await ready
+					const localDefault = defaultStores.find((d) => /^file:\/\//.test(d.url))
+					const localNorm = localDefault ? normalize(localDefault.url).toLowerCase() : null
+					return state.stores.map(({url, meta, name, localDefault: isLocal}) => ({
+						url,
+						meta: meta ?? {id: url, name: name ?? url.split('/').pop()},
+						...(isLocal || (localNorm && url.toLowerCase() === localNorm) ? {replaces: DEFAULT_STORES[0].url} : {}),
+					}))
+				},
+			},
 			'appStore.addRepository': {
 				kind: 'mutation',
 				run: async (input) => {
