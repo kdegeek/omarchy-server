@@ -7,6 +7,7 @@ import {join} from 'node:path'
 import {test} from 'node:test'
 
 import {openAccounts} from '../omarchyd/accounts.mjs'
+import {createApps} from '../omarchyd/apps.mjs'
 import {startOmarchyd} from '../omarchyd/server.mjs'
 
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {cwd, stdio: 'pipe'}).toString()
@@ -19,9 +20,8 @@ function portAvailable(port) {
 	})
 }
 
-async function pickPort() {
-	const base = 30000 + Math.floor(Math.random() * 2000)
-	for (let p = base; p < base + 200; p++) if (await portAvailable(p)) return p
+async function pickPort(start = 30000 + Math.floor(Math.random() * 2000)) {
+	for (let p = start; p < start + 200; p++) if (await portAvailable(p)) return p
 	throw new Error('no free port found')
 }
 
@@ -131,4 +131,76 @@ test('failed app start, stop, and restart return the engine error instead of Int
 	const down = await rpc('apps.start', {appId: 'demo-app'})
 	assert.equal(down.status, 412)
 	assert.match(down.body.error.message, /Apps need Podman/)
+})
+
+test('uninstall keeps protecting a dependency after the dependent app’s store is removed', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'app-deps-596-')))
+	const prevDockerHost = process.env.DOCKER_HOST
+	t.after(async () => {
+		if (prevDockerHost === undefined) delete process.env.DOCKER_HOST
+		else process.env.DOCKER_HOST = prevDockerHost
+		await rm(root, {recursive: true, force: true})
+	})
+
+	const sock = join(root, 'podman.sock')
+	await writeFile(sock, '')
+	process.env.DOCKER_HOST = `unix://${sock}`
+
+	const portA = await pickPort()
+	const portB = await pickPort(portA + 1)
+	const store = join(root, 'store')
+	await mkdir(join(store, 'aa'), {recursive: true})
+	await mkdir(join(store, 'bb'), {recursive: true})
+	await writeFile(join(store, 'omarchy-app-store.yml'), 'id: demo\nname: Demo\n')
+	await writeFile(join(store, 'aa', 'omarchy-app.yml'), `manifestVersion: 1\nid: aa\nname: aa\nversion: "1.0"\nport: ${portA}\nweb:\n  service: web\n  port: 80\n`)
+	await writeFile(join(store, 'aa', 'docker-compose.yml'), 'services:\n  web:\n    image: nginx\n')
+	await writeFile(join(store, 'bb', 'omarchy-app.yml'), `manifestVersion: 1\nid: bb\nname: bb\nversion: "1.0"\nport: ${portB}\ndependencies:\n  - aa\nweb:\n  service: web\n  port: 80\n`)
+	await writeFile(join(store, 'bb', 'docker-compose.yml'), 'services:\n  web:\n    image: nginx\n')
+	git(store, 'init', '-q', '-b', 'main')
+	git(store, 'add', '.')
+	git(store, 'commit', '-qm', 'init')
+
+	const up = new Set()
+	const networks = new Set()
+	const run = async (cmd, args, opts = {}) => {
+		if (cmd === 'git') return execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString()
+		if (cmd === 'docker-compose') {
+			if (args[0] === 'version') return 'Docker Compose version v2.30.0'
+			const verb = args.find((a) => ['up', 'stop', 'restart', 'pull', 'ps', 'down'].includes(a))
+			if (verb === 'up' || verb === 'restart') up.add(args[1])
+			if (verb === 'stop' || verb === 'down') up.delete(args[1])
+			if (verb === 'ps') return JSON.stringify([{Service: 'web', State: up.has(args[1]) ? 'running' : 'exited'}])
+			return ''
+		}
+		if (cmd === 'podman') {
+			if (args[0] === 'info') return '{}'
+			if (args[0] === 'ps') return JSON.stringify([...up].map((p) => ({Labels: {'com.docker.compose.project': p}, State: 'running'})))
+			if (args[1] === 'rm') execFileSync('rm', args.slice(2))
+			if (args[0] === 'network' && args[1] === 'exists' && !networks.has(args[2])) throw new Error('no such network')
+			if (args[0] === 'network' && args[1] === 'create') networks.add(args.at(-1))
+			return ''
+		}
+		if (cmd === 'setfacl') return ''
+		return ''
+	}
+
+	const storeUrl = `file://${store}`
+	const apps = createApps({dataDir: join(root, 'data'), home: join(root, 'home'), allowFileStores: true, gatewayHost: '127.0.0.1', defaultStores: [], systemApps: null, run})
+	t.after(() => apps.close())
+
+	await apps.procedures['appStore.addRepository'].run({url: storeUrl})
+	await apps.procedures['apps.install'].run({appId: 'bb'})
+	for (let i = 0; i < 120; i++) {
+		const list = await apps.procedures['apps.list'].run()
+		if (list.filter((a) => ['aa', 'bb'].includes(a.id) && a.state === 'running').length === 2) break
+		await new Promise((r) => setTimeout(r, 40))
+	}
+
+	await assert.rejects(apps.procedures['apps.uninstall'].run({appId: 'aa'}), /bb needs aa/)
+	await apps.procedures['appStore.removeRepository'].run({url: storeUrl})
+	await assert.rejects(apps.procedures['apps.uninstall'].run({appId: 'aa'}), /bb needs aa/)
+
+	await apps.procedures['apps.uninstall'].run({appId: 'bb'})
+	await apps.procedures['apps.uninstall'].run({appId: 'aa'})
+	assert.deepEqual(await apps.procedures['apps.list'].run(), [])
 })

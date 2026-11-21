@@ -1771,7 +1771,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		const queued = plan.map((src) => {
 			const leftover = state.apps.find((a) => a.id === src.id && a.state === 'error')
 			if (leftover) state.apps = state.apps.filter((a) => a !== leftover)
-			const app = {id: src.id, name: src.name, version: src.version, icon: src.icon, port: src.port, path: src.path, defaultUsername: src.defaultUsername, defaultPassword: src.defaultPassword, deterministicPassword: src.deterministicPassword, ...(src.requiresHttps ? {requiresHttps: true} : {}), ...(src.web?.https ? {internalHttps: true} : {}), ...(src.openPorts?.length ? {openPorts: src.openPorts} : {}), ...(src.mcp ? {mcp: src.mcp} : {}), ...(src.store ? {store: src.store} : {}), ...(src.implements?.length ? {implements: src.implements} : {}), ...(src.folders?.length ? {folderIds: src.folders.map((f) => f.id), folders: Object.fromEntries(src.folders.filter((f) => placed.has(`${src.id}/${f.id}`)).map((f) => [f.id, placed.get(`${src.id}/${f.id}`)]))} : {}), installedAt: Date.now(), state: 'installing', permissions: needs.get(src.id) ?? [], ownSecretsOnly: true}
+			const app = {id: src.id, name: src.name, version: src.version, icon: src.icon, port: src.port, path: src.path, defaultUsername: src.defaultUsername, defaultPassword: src.defaultPassword, deterministicPassword: src.deterministicPassword, ...(src.requiresHttps ? {requiresHttps: true} : {}), ...(src.web?.https ? {internalHttps: true} : {}), ...(src.openPorts?.length ? {openPorts: src.openPorts} : {}), ...(src.mcp ? {mcp: src.mcp} : {}), ...(src.store ? {store: src.store} : {}), ...(src.implements?.length ? {implements: src.implements} : {}), ...(src.needs?.length ? {needs: src.needs} : {}), ...(src.folders?.length ? {folderIds: src.folders.map((f) => f.id), folders: Object.fromEntries(src.folders.filter((f) => placed.has(`${src.id}/${f.id}`)).map((f) => [f.id, placed.get(`${src.id}/${f.id}`)]))} : {}), installedAt: Date.now(), state: 'installing', permissions: needs.get(src.id) ?? [], ownSecretsOnly: true}
 			state.apps.push(app)
 			busy.set(app.id, {state: 'installing', progress: 0})
 			return {src, app}
@@ -1870,6 +1870,8 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 			Object.assign(app, {version: src.version, name: src.name, icon: src.icon, path: src.path, requiresHttps: src.requiresHttps || undefined, internalHttps: src.web?.https || undefined})
 			if (src.mcp) app.mcp = src.mcp
 			else delete app.mcp
+			if (src.needs?.length) app.needs = src.needs
+			else delete app.needs
 			delete app.state
 			delete app.error
 		} catch (error) {
@@ -1926,8 +1928,8 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		const users = []
 		for (const other of state.apps) {
 			if (other.id === app.id) continue
-			const src = await findInRegistry(other.id).catch(() => null)
-			const needs = (src?.needs ?? []).filter((n) => provides.includes(n))
+			const otherNeeds = Array.isArray(other.needs) ? other.needs : ((await findInRegistry(other.id).catch(() => null))?.needs ?? [])
+			const needs = otherNeeds.filter((n) => provides.includes(n))
 			if (needs.some((n) => !state.apps.some((a) => a.id !== app.id && a.state !== 'error' && (a.id === n || (a.implements ?? []).includes(n))))) users.push(other.name ?? other.id)
 		}
 		if (users.length) throw new RpcError('PRECONDITION_FAILED', `${users.join(', ')} ${users.length > 1 ? 'need' : 'needs'} ${app.name ?? app.id}. Uninstall ${users.length > 1 ? 'them' : 'it'} first.`)
