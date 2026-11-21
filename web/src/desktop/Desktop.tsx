@@ -21,7 +21,7 @@ import {LockChip, WorkspacePills} from './hyprland/Bar'
 import {Cheatsheet} from './hyprland/Cheatsheet'
 import {injectConsoleKey, keysymFromEvent, lastMinimizedOn, releaseConsoleSuper, topVisibleWindow} from './hyprland/consoleBridge'
 import {CAPTURE_KEY, ONBOARDING_KEY, canUseKeyboardLock, chipIntent, keyboardLockApi, onCaptureModeChange, onFullscreenChange, resolveMode, toggleLock, type GrabState} from './hyprland/grab'
-import {actionOf, isSuper, type Action} from './hyprland/keymap'
+import {isSuper, resolveHyprKey, type Action} from './hyprland/keymap'
 import {Launcher} from './hyprland/Launcher'
 import {GAP, collapse, contains, firstLeaf, flipSplit, focusDir, insert as insertTile, isNode, reconcile, rects as tileRectsOf, remove as removeTile, swapDir, type Node} from './hyprland/layout'
 import {Onboarding} from './hyprland/Onboarding'
@@ -655,6 +655,33 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 				api.openTerminal()
 				if (cfg.shell === 'hyprland') return
 			}
+			if (cfg.shell === 'hyprland') {
+				const top = topVisibleWindow(winsRef.current, hyprWsRef.current, true)
+				const consoleFocused = top?.kind === 'console'
+				const res = resolveHyprKey(e, {consoleFocused: !!consoleFocused})
+				if (res?.kind === 'grab-toggle') {
+					e.preventDefault()
+					e.stopPropagation()
+					releaseLastConsole()
+					setGrab((s) => toggleLock(s, e.code === 'F12' ? 'f12' : 'scroll'))
+					return
+				}
+				if (res?.kind === 'console-forward' && top) {
+					if (!keysymFromEvent(e)) return
+					e.preventDefault()
+					e.stopPropagation()
+					if (lastConsoleRef.current && lastConsoleRef.current !== top.id) releaseConsoleSuper(lastConsoleRef.current)
+					lastConsoleRef.current = top.id
+					injectConsoleKey(top.id, e)
+					return
+				}
+				if (res?.kind === 'action') {
+					e.preventDefault()
+					e.stopPropagation()
+					runHyprRef.current(res.action)
+					return
+				}
+			}
 			if (e.key === 'Escape') {
 				setMenu(null)
 				setTopMenu(null)
@@ -662,30 +689,6 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 				setLauncher(false)
 				setCheatsheet(false)
 			}
-			if (cfg.shell !== 'hyprland') return
-			const top = topVisibleWindow(winsRef.current, hyprWsRef.current, true)
-			const consoleFocused = top?.kind === 'console'
-			const act = actionOf(e, {consoleFocused: !!consoleFocused})
-			if (act?.type === 'grab-toggle') {
-				e.preventDefault()
-				e.stopPropagation()
-				releaseLastConsole()
-				setGrab((s) => toggleLock(s, e.code === 'F12' ? 'f12' : 'scroll'))
-				return
-			}
-			if (consoleFocused && top && isSuper(e) && !act) {
-				if (!keysymFromEvent(e)) return
-				e.preventDefault()
-				e.stopPropagation()
-				if (lastConsoleRef.current && lastConsoleRef.current !== top.id) releaseConsoleSuper(lastConsoleRef.current)
-				lastConsoleRef.current = top.id
-				injectConsoleKey(top.id, e)
-				return
-			}
-			if (!act) return
-			e.preventDefault()
-			e.stopPropagation()
-			runHyprRef.current(act)
 		}
 		const up = (e: KeyboardEvent) => {
 			if (cfg.shell !== 'hyprland' && (e.key === 'Meta' || e.key === 'OS') && superAlone) setOverview((o) => (o ? null : 'windows'))
