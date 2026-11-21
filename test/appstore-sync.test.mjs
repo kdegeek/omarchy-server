@@ -209,3 +209,36 @@ test('overlapping refresh and registry reads share one fetch on an existing clon
 	assert.equal(count, 2)
 	assert.deepEqual(reg[0].apps.map((x) => x.id).sort(), ['one', 'two'])
 })
+
+test('failed first store sync is not cached for an hour so retrying online succeeds', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'appstore-offline-')))
+	t.after(() => rm(root, {recursive: true, force: true}))
+
+	const store = await makeStore(root, 'store-a', [{id: 'one', port: 31001}])
+	let offline = true
+	let gitCalls = 0
+	const run = async (cmd, args, opts = {}) => {
+		if (cmd === 'git') {
+			gitCalls++
+			if (offline) throw new Error('git: Could not resolve host')
+			return execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString()
+		}
+		return ''
+	}
+
+	const apps = createApps({dataDir: join(root, 'data'), home: join(root, 'home'), allowFileStores: true, defaultStores: [{url: store.url}], systemApps: null, run})
+	t.after(() => apps.close())
+
+	assert.deepEqual(await apps.procedures['appStore.registry'].run(), [])
+	assert.equal(gitCalls, 1)
+
+	offline = false
+	const reg = await apps.procedures['appStore.registry'].run()
+	assert.equal(reg.length, 1)
+	assert.deepEqual(reg[0].apps.map((x) => x.id), ['one'])
+	assert.equal(gitCalls, 2)
+
+	const cached = await apps.procedures['appStore.registry'].run()
+	assert.equal(cached.length, 1)
+	assert.equal(gitCalls, 2)
+})

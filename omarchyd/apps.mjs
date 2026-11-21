@@ -565,7 +565,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 	const gateways = new Map() // appId -> {server, port}
 	const tickets = new Map() // one-time hand-overs from the web app
 	let registryCache = null
-	let registryWarm = null
+	let registryWarmed = false
 	let storesGen = 0
 	const syncing = new Map()
 	let registryInFlight = null
@@ -1048,6 +1048,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		const stillAdded = (url) => state.stores.some((x) => x.url.toLowerCase() === url.toLowerCase())
 		const list = []
 		let dirty = false
+		let hadFailure = false
 		for (const s of snapshot) {
 			if (!stillAdded(s.url)) continue
 			if (refresh || Date.now() - (s.syncedAt ?? 0) > 60 * 60_000) {
@@ -1064,6 +1065,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 						await rm(storeDir(s.url), {recursive: true, force: true}).catch(() => {})
 						continue
 					}
+					hadFailure = true
 				}
 			}
 			if (!stillAdded(s.url)) continue
@@ -1075,7 +1077,9 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 				s.meta = loaded.meta
 				if (!prev || prev.id !== loaded.meta.id || prev.name !== loaded.meta.name) dirty = true
 				list.push(loaded)
-			} catch {}
+			} catch {
+				if (stillAdded(s.url)) hadFailure = true
+			}
 		}
 		try {
 			if ((await readdir(storeDir(IMPORTED_STORE))).length) list.push(await loadStore(IMPORTED_STORE))
@@ -1100,7 +1104,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 			else delete app.internalHttps
 		}
 		if (dirty) await save()
-		if (storesGen === gen) registryCache = {at: Date.now(), list: current}
+		if (storesGen === gen && !hadFailure) registryCache = {at: Date.now(), list: current}
 		return current
 	}
 	async function registry({refresh = false} = {}) {
@@ -1465,7 +1469,10 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 	async function list() {
 		await ready
 		// Read the stores once after start, in the background, so installed apps get any listing changes.
-		if (!registryCache && !registryWarm) registryWarm = registry().catch(() => {}).finally(() => (registryWarm = null))
+		if (!registryCache && !registryWarmed) {
+			registryWarmed = true
+			registry().catch(() => {})
+		}
 		const live = await liveStates()
 		return state.apps.map((a) => {
 			const b = busy.get(a.id)
