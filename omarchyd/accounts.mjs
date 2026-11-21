@@ -4,6 +4,7 @@ import {createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual} from 'node
 import {chmod, mkdir, readFile, rename, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {promisify} from 'node:util'
+import {readFileSync} from 'node:fs'
 
 import {RpcError} from './rpc.mjs'
 
@@ -140,6 +141,24 @@ export async function openAccounts(dataDir) {
 	}
 	const userById = (id) => state.users.find((u) => u.userId === id)
 	const publicUser = (u) => ({userId: u.userId, name: u.name, role: u.role, language: u.language ?? 'en', wallpaper: u.wallpaper ?? {id: 'omarchy'}})
+	// While no owner exists yet, another process (`omarchyd create-owner`) may create one on disk.
+	let resetting = false
+	const reloadIfEmpty = () => {
+		if (state.users.length || resetting) return
+		let text
+		try {
+			text = readFileSync(file, 'utf8')
+		} catch {
+			return
+		}
+		let parsed
+		try {
+			parsed = JSON.parse(text)
+		} catch {
+			return
+		}
+		if (accountsObject(parsed) && parsed.users.length) state = {users: [], devices: {}, browsers: {}, ...parsed}
+	}
 
 	// Guessing passwords: checks for an account run one at a time, and after a few wrong ones each
 	// further try waits longer (up to 30 s). Nobody is ever locked out, but guessing becomes far too
@@ -148,6 +167,7 @@ export async function openAccounts(dataDir) {
 	const queues = new Map() // userId -> promise of the check in progress
 	const usedSteps = new Map() // userId -> last 2FA time step used (a code works once)
 	async function verify(input, opts) {
+		reloadIfEmpty()
 		const key = input?.userId ?? state.users[0]?.userId ?? '-'
 		const prev = queues.get(key) ?? Promise.resolve()
 		const run = prev.catch(() => {}).then(async () => {
@@ -171,6 +191,7 @@ export async function openAccounts(dataDir) {
 		}
 	}
 	async function check({userId, password, totpToken}, {twoFactor = true} = {}) {
+		reloadIfEmpty()
 		const user = userId ? userById(userId) : state.users[0]
 		if (!user || typeof password !== 'string' || !(await checkPassword(password, user))) {
 			await new Promise((r) => setTimeout(r, 300 + Math.random() * 300))
@@ -204,8 +225,9 @@ export async function openAccounts(dataDir) {
 	}
 
 	return {
-		hasOwner: () => state.users.length > 0,
+		hasOwner: () => (reloadIfEmpty(), state.users.length > 0),
 		async createOwner({name, password}) {
+			reloadIfEmpty()
 			if (state.users.length) throw new Error('An owner account already exists')
 			const clean = String(name ?? '').trim()
 			if (!/^[\p{L}\p{N} ._-]{1,40}$/u.test(clean)) throw new Error('Use 1-40 letters, numbers, spaces, dots, dashes or underscores for the name')
@@ -249,13 +271,19 @@ export async function openAccounts(dataDir) {
 		},
 		// Factory reset: every account and sign-in goes; the next visit starts first-time setup.
 		async reset() {
-			state = {users: [], devices: {}, browsers: {}}
-			access.clear()
-			urlTokens.clear()
-			await save()
+			resetting = true
+			try {
+				state = {users: [], devices: {}, browsers: {}}
+				access.clear()
+				urlTokens.clear()
+				await save()
+			} finally {
+				resetting = false
+			}
 		},
-		listAccounts: () => state.users.map(publicUser),
+		listAccounts: () => (reloadIfEmpty(), state.users.map(publicUser)),
 		getUser: (userId) => {
+			reloadIfEmpty()
 			const u = userById(userId)
 			return u ? publicUser(u) : null
 		},
