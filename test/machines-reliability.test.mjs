@@ -752,6 +752,85 @@ test('#605: live backup requires space for two copies and cleans up each live co
 	assert.equal(disk0GoneDuringDisk1Convert, true)
 })
 
+test('#648: pre-0.4.0 machines without layout get backfilled at startup and all hardware/drive actions work', async (t) => {
+	const id = 'a1b2c3d4'
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd === 'virsh') {
+				const a = args[0] === '-c' ? args.slice(2) : args
+				if (a[0] === 'list') return ' Id   Name   State\n------------------\n'
+				return ''
+			}
+			if (cmd === 'qemu-img' && args[0] === 'create') {
+				await writeFile(args[3], 'blank')
+			}
+			if (cmd === 'qemu-img' && args[0] === 'convert') {
+				await writeFile(args.at(-1), 'converted')
+			}
+			if (cmd === 'xorriso') {
+				await writeFile(args[args.indexOf('-output') + 1], 'iso')
+			}
+			return ''
+		},
+	})
+	const homeDir = join(env.root, 'home')
+	await mkdir(homeDir, {recursive: true})
+	await writeFile(join(homeDir, 'boot.iso'), 'iso')
+	const files = {resolve: async (p) => ({real: p === '/Home' ? homeDir : join(homeDir, p.replace(/^\/Home\/?/, ''))})}
+
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'old-disk')
+	await writeFile(
+		join(env.dataDir, 'machines', 'machines.json'),
+		JSON.stringify({machines: [{id, name: 'old-debian', osId: 'debian-12', cores: 2, memoryGb: 2, diskSizeGb: 20, portForwards: [], createdAt: 1760000000000}]}),
+	)
+
+	const m = env.open({files})
+	await m.ready
+
+	const det = await m.procedures['machines.details'].run({id})
+	assert.deepEqual(
+		det.hardware.disks.map((d) => [d.id, d.role, d.target]),
+		[
+			['disk0', null, 'vda'],
+			['seed', 'seed', 'sda'],
+		],
+	)
+	assert.equal(det.hardware.disks[0].sizeGb, 20)
+	assert.deepEqual(det.boot, ['disk0'])
+	assert.equal(det.cloudInit.hostname, 'old-debian')
+
+	assert.equal(await m.procedures['machines.updateHardware'].run({id, memoryMb: 2048}), true)
+	const {diskId: d1} = await m.procedures['machines.addDisk'].run({id, sizeGb: 5})
+	const {diskId: cd0} = await m.procedures['machines.addCdrom'].run({id})
+	assert.equal(await m.procedures['machines.setBootOrder'].run({id, order: [cd0, 'disk0']}), true)
+	assert.equal(await m.procedures['machines.snapshot'].run({id, name: 'snap1'}), true)
+	assert.equal(await m.procedures['machines.updateDisk'].run({id, diskId: d1, cache: 'writeback'}), true)
+	assert.equal(await m.procedures['machines.resizeDisk'].run({id, diskId: d1, sizeGb: 8}), true)
+	assert.equal(await m.procedures['machines.updateCloudInit'].run({id, username: 'chris'}), true)
+	assert.equal(await m.procedures['machines.setMedia'].run({id, diskId: cd0, iso: 'local:/Home/boot.iso'}), true)
+	assert.equal(await m.procedures['machines.removeDisk'].run({id, diskId: cd0}), true)
+
+	const {id: copyId} = await m.procedures['machines.clone'].run({id, name: 'old-debian-copy'})
+	const endClone = Date.now() + 5000
+	for (;;) {
+		const c = (await m.procedures['machines.list'].run()).find((x) => x.id === copyId)
+		if (c?.state === 'stopped') break
+		if (c?.state === 'error') throw new Error(`clone failed: ${c.errorMessage}`)
+		if (Date.now() > endClone) throw new Error('clone timed out')
+		await new Promise((r) => setTimeout(r, 20))
+	}
+
+	const {backupId} = await m.procedures['machines.backup'].run({id})
+	const endBackup = Date.now() + 5000
+	while (!(await m.procedures['machines.backups'].run({id})).some((b) => b.id === backupId)) {
+		if (Date.now() > endBackup) throw new Error('backup timed out')
+		await new Promise((r) => setTimeout(r, 20))
+	}
+})
+
+
 
 
 

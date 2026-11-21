@@ -295,34 +295,37 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		m.snapshots ??= []
 		m.mac ??= randomMac()
 		m.usbDevices = Array.isArray(m.usbDevices) ? m.usbDevices : []
-		if (m.layout) {
-			m.layout.machineType ??= 'q35'
-			let disks = 0
-			let cds = 0
-			for (const d of m.layout.disks) {
-				if (d.role === 'seed' && !m.cloudInit) {
-					if (/^omarchy/i.test(m.osId ?? '')) d.role = 'installer'
-					else m.cloudInit = {username: '', hostname: hostnameFor(m.name, m.id), sshKeys: []}
-					continue
-				}
-				if (d.id) continue
-				if (/seed\.iso$/.test(d.file)) {
-					if (!m.cloudInit && /^omarchy/i.test(m.osId ?? '')) Object.assign(d, {id: 'seed', role: 'installer'})
-					else {
-						Object.assign(d, {id: 'seed', role: 'seed'})
-						m.cloudInit ??= {username: '', hostname: hostnameFor(m.name, m.id), sshKeys: []}
-					}
-				} else if (/answer\.iso$/.test(d.file)) Object.assign(d, {id: 'answer', role: 'answer'})
-				else d.id = d.device === 'cdrom' ? `cd${cds++}` : `disk${disks++}`
-			}
-			if (!m.boot) {
-				const ordered = m.layout.disks.filter((d) => d.bootOrder).sort((a, b) => a.bootOrder - b.bootOrder)
-				m.boot = ordered.length ? ordered.map((d) => d.id) : [m.layout.disks.find((d) => d.device === 'disk')?.id ?? 'disk0']
-			}
-			for (const d of m.layout.disks) delete d.bootOrder
-			const first = m.layout.disks.find((d) => d.device === 'disk')
-			if (first && first.sizeGb === undefined) first.sizeGb = m.diskSizeGb
+		if (!m.layout) {
+			m.layout = layoutFor('cloud', join(vmsDir, m.id))
+			m.cloudInit ??= {username: '', hostname: hostnameFor(m.name, m.id), sshKeys: []}
 		}
+		m.layout.disks = Array.isArray(m.layout.disks) ? m.layout.disks : []
+		m.layout.machineType ??= 'q35'
+		let disks = 0
+		let cds = 0
+		for (const d of m.layout.disks) {
+			if (d.role === 'seed' && !m.cloudInit) {
+				if (/^omarchy/i.test(m.osId ?? '')) d.role = 'installer'
+				else m.cloudInit = {username: '', hostname: hostnameFor(m.name, m.id), sshKeys: []}
+				continue
+			}
+			if (d.id) continue
+			if (/seed\.iso$/.test(d.file)) {
+				if (!m.cloudInit && /^omarchy/i.test(m.osId ?? '')) Object.assign(d, {id: 'seed', role: 'installer'})
+				else {
+					Object.assign(d, {id: 'seed', role: 'seed'})
+					m.cloudInit ??= {username: '', hostname: hostnameFor(m.name, m.id), sshKeys: []}
+				}
+			} else if (/answer\.iso$/.test(d.file)) Object.assign(d, {id: 'answer', role: 'answer'})
+			else d.id = d.device === 'cdrom' ? `cd${cds++}` : `disk${disks++}`
+		}
+		if (!m.boot) {
+			const ordered = m.layout.disks.filter((d) => d.bootOrder).sort((a, b) => a.bootOrder - b.bootOrder)
+			m.boot = ordered.length ? ordered.map((d) => d.id) : [m.layout.disks.find((d) => d.device === 'disk')?.id ?? 'disk0']
+		}
+		for (const d of m.layout.disks) delete d.bootOrder
+		const first = m.layout.disks.find((d) => d.device === 'disk')
+		if (first && first.sizeGb === undefined) first.sizeGb = m.diskSizeGb
 		m.memoryGb = Math.max(1, Math.round(m.memoryMb / 1024))
 		return m
 	}
