@@ -98,8 +98,9 @@ export function classifyExcelFormat(numFmtId: number, formatCode?: string): Exce
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
+const xmlBool = (v: string | null | undefined) => v === "1" || v === "true";
 
-export function formatExcelSerial(serial: number, kind: ExcelFormatKind): string {
+export function formatExcelSerial(serial: number, kind: ExcelFormatKind, date1904 = false): string {
   if (!Number.isFinite(serial)) return String(serial);
   if (kind.startsWith("dur-")) {
     const totalSec = Math.round(Math.abs(serial) * 86400);
@@ -112,7 +113,8 @@ export function formatExcelSerial(serial: number, kind: ExcelFormatKind): string
     const s = totalSec % 60;
     return kind === "dur-hms" ? `${sign}${h}:${pad2(m)}:${pad2(s)}` : `${sign}${h}:${pad2(m)}`;
   }
-  const d = new Date(Math.round((serial - 25569) * 86400 * 1000));
+  const epoch = date1904 ? 24107 : 25569;
+  const d = new Date(Math.round((serial - epoch) * 86400 * 1000));
   if (Number.isNaN(d.getTime())) return String(serial);
   const iso = d.toISOString();
   const day = iso.slice(0, 10);
@@ -131,6 +133,8 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
   const wbPath = "xl/workbook.xml";
   const wb = await read(zip, wbPath);
   if (!wb) throw new Error("This isn’t an Excel workbook");
+  const wbDoc = xml(wb);
+  const date1904 = xmlBool(first(wbDoc, "workbookPr")?.getAttribute("date1904"));
   const wbRels = await rels(zip, wbPath);
   const shared: string[] = [];
   const sst = await read(zip, "xl/sharedStrings.xml");
@@ -150,7 +154,7 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
       }
   }
   const sheets: Sheet[] = [];
-  for (const s of all(xml(wb), "sheet")) {
+  for (const s of all(wbDoc, "sheet")) {
     const name = s.getAttribute("name") ?? `Sheet ${sheets.length + 1}`;
     const rid = s.getAttributeNS(R_NS, "id") ?? s.getAttribute("r:id") ?? "";
     const path = wbRels.get(rid);
@@ -178,7 +182,7 @@ export async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
         else if (t === "str" || t === "e") val = v;
         else if (v !== "") {
           const ds = dateStyles[Number(c.getAttribute("s") ?? -1)];
-          val = ds ? formatExcelSerial(Number(v), ds) : cleanNum(v);
+          val = ds ? formatExcelSerial(Number(v), ds, date1904) : cleanNum(v);
         }
         out[ci] = val;
       });

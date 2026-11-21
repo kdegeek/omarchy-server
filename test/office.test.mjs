@@ -208,3 +208,34 @@ test('readXlsx renders [h]:mm, [h]:mm:ss, [m]:ss, and [s] durations instead of 1
 		['90:00', '86', '42'],
 	])
 })
+
+test('readXlsx honours workbookPr date1904 without shifting durations', async () => {
+	const stylesXml =
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+		'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+		'<numFmts count="1"><numFmt numFmtId="164" formatCode="[h]:mm"/></numFmts>' +
+		'<cellXfs count="2"><xf numFmtId="14"/><xf numFmtId="164"/></cellXfs>' +
+		'</styleSheet>'
+	const sheetXml =
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+		'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+		'<row r="1"><c r="A1" s="0"><v>43831</v></c><c r="B1" s="1"><v>1.5</v></c></row>' +
+		'</sheetData></worksheet>'
+	const wbWith = (pr) =>
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+		'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+		pr +
+		'<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'
+
+	const s1900 = await readXlsx(await makeXlsx({workbookXml: wbWith(''), stylesXml, sheetXml}))
+	assert.deepEqual(s1900[0].rows, [['2020-01-01', '36:00']])
+
+	const s1904a = await readXlsx(await makeXlsx({workbookXml: wbWith('<workbookPr date1904="1"/>'), stylesXml, sheetXml}))
+	assert.deepEqual(s1904a[0].rows, [['2024-01-02', '36:00']])
+
+	const s1904b = await readXlsx(await makeXlsx({workbookXml: wbWith('<workbookPr date1904="true"/>'), stylesXml, sheetXml}))
+	assert.deepEqual(s1904b[0].rows, [['2024-01-02', '36:00']])
+
+	const s1904Off = await readXlsx(await makeXlsx({workbookXml: wbWith('<workbookPr date1904="0"/>'), stylesXml, sheetXml}))
+	assert.deepEqual(s1904Off[0].rows, [['2020-01-01', '36:00']])
+})
