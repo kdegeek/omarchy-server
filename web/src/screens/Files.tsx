@@ -28,7 +28,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
-import { batchToastMessage, canSubmitNamePrompt, type FavoriteItem, favoritePath, nextSearchSelection, runFileBatch, sharePasswordAction, sharePasswordLabel, shouldActivateRowOnKey } from "../filesHelpers";
+import { batchToastMessage, canSubmitNamePrompt, type FavoriteItem, favoritePath, nextSearchSelection, runFileBatch, sharePasswordAction, sharePasswordLabel, shouldActivateRowOnKey, UPLOAD_REFRESH_KEYS } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -394,7 +394,9 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
   const photoInput = useRef<HTMLInputElement>(null);
   const [dropping, setDropping] = useState(false);
   const dragDepth = useRef(0);
-  const refresh = () => qc.invalidateQueries({ queryKey: ["files.list"] });
+  const refresh = () => {
+    for (const key of UPLOAD_REFRESH_KEYS) qc.invalidateQueries({ queryKey: [...key] });
+  };
   const { uploads, start: upload, clear: clearUploads } = useUploads(refresh);
 
   useEffect(() => {

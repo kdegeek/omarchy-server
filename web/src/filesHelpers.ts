@@ -115,4 +115,7 @@ export function sharePasswordAction({
 	return reveal ? 'refetch' : 'reveal'
 }
 
+/** Query keys invalidated once an upload batch finishes so both listings and Recents update. */
+export const UPLOAD_REFRESH_KEYS = [['files.list'], ['files.recents']] as const
+
 export type {FileEntry}

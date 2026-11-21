@@ -233,3 +233,14 @@ describe('files screen: #196 ShareSheet password error and retry', () => {
 		assert.match(src, /sharePasswordLabel\(\{ data: pw\.data, isFetching: pw\.isFetching, error: pw\.error \}\)/)
 	})
 })
+
+describe('files screen: #197 refresh Recents after uploads', () => {
+	test('UPLOAD_REFRESH_KEYS invalidates both files.list and files.recents', () => {
+		assert.deepEqual(helpers.UPLOAD_REFRESH_KEYS, [['files.list'], ['files.recents']])
+	})
+
+	test('Files.tsx invalidates UPLOAD_REFRESH_KEYS when uploads finish', async () => {
+		const src = await filesSource()
+		assert.match(src, /for \(const key of UPLOAD_REFRESH_KEYS\)\s*qc\.invalidateQueries\(\{ queryKey: \[...key\] \}\)/)
+	})
+})
