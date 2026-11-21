@@ -207,9 +207,10 @@ export async function openAccounts(dataDir) {
 		hasOwner: () => state.users.length > 0,
 		async createOwner({name, password}) {
 			if (state.users.length) throw new Error('An owner account already exists')
-			if (!/^[\p{L}\p{N} ._-]{1,40}$/u.test(name ?? '')) throw new Error('Use 1-40 letters, numbers, spaces, dots, dashes or underscores for the name')
+			const clean = String(name ?? '').trim()
+			if (!/^[\p{L}\p{N} ._-]{1,40}$/u.test(clean)) throw new Error('Use 1-40 letters, numbers, spaces, dots, dashes or underscores for the name')
 			if (typeof password !== 'string' || password.length < 8) throw new Error('Use a password of at least 8 characters')
-			state.users.push({userId: 'owner', name: name.trim(), role: 'owner', language: 'en', ...(await hashPassword(password)), createdAt: now()})
+			state.users.push({userId: 'owner', name: clean, role: 'owner', language: 'en', ...(await hashPassword(password)), createdAt: now()})
 			await save()
 		},
 		async setPassword(userId, {oldPassword, newPassword}) {
