@@ -412,9 +412,10 @@ function toDetail(a) {
 
 // Turn a store compose file into what omarchyd runs: no app_proxy, the web service published on
 // 127.0.0.1 only. Returns the compose text and where the gateway should forward to.
+const stringList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [])
 // The apps `id` needs, dependencies first (a depth-first post-order).
 function orderNeeds(id, byId, seen = new Set(), out = []) {
-	for (const d of (byId.get(id)?.a.dependencies ?? []).filter((x) => typeof x === 'string')) {
+	for (const d of stringList(byId.get(id)?.a.dependencies)) {
 		if (seen.has(d)) continue
 		seen.add(d)
 		orderNeeds(d, byId, seen, out)
@@ -957,16 +958,16 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		const byId = new Map(found.map((f) => [f.a.id, f]))
 		// Everything an app needs, all the way down (bitcoin → lightning → …).
 		const needsOf = (id, seen = new Set()) => {
-			for (const d of (byId.get(id)?.a.dependencies ?? []).filter((x) => typeof x === 'string')) {
+			for (const d of stringList(byId.get(id)?.a.dependencies)) {
 				if (seen.has(d)) continue
 				seen.add(d)
 				needsOf(d, seen)
 			}
 			return seen
 		}
-		const neededByOthers = new Set(found.flatMap((f) => (f.a.dependencies ?? []).filter((x) => typeof x === 'string')))
+		const neededByOthers = new Set(found.flatMap((f) => stringList(f.a.dependencies)))
 		for (const {a, entry, compose, exported} of found) {
-			const deps = (a.dependencies ?? []).filter((x) => typeof x === 'string')
+			const deps = stringList(a.dependencies)
 			const all = [...needsOf(a.id)]
 			const absent = all.filter((d) => !byId.has(d))
 			const fromDeps = all.flatMap((d) => byId.get(d)?.exported ?? [])
@@ -995,7 +996,7 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 				description: a.description,
 				developer: a.developer,
 				website: a.website,
-				gallery: (a.gallery ?? []).map(media).filter(Boolean),
+				gallery: (Array.isArray(a.gallery) ? a.gallery : []).map(media).filter(Boolean),
 				releaseNotes: a.releaseNotes,
 				dependencies: deps,
 				// Everything installed along with it, in install order (what it needs comes first).
