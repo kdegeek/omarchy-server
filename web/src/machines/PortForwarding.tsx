@@ -3,12 +3,12 @@
 import {useState} from 'react'
 
 import {type Machine, type PortForward} from '../api'
-import {useAction} from '../data'
+import {useMachines} from '../data'
 import {Icon} from '../icons'
 import {haptic} from '../ui'
+import {useMachineAction} from './api'
+import {PORT_MAX, PORT_MIN, nextFreePort, takenPorts} from './portForwardingState'
 
-const PORT_MIN = 40_000
-const PORT_MAX = 49_999
 const PRESETS = [
 	{label: 'SSH', guestPort: 22, hostPort: 42222},
 	{label: 'Web (80)', guestPort: 80, hostPort: 48080},
@@ -16,32 +16,33 @@ const PRESETS = [
 	{label: 'Remote desktop', guestPort: 3389, hostPort: 43389},
 ]
 export function PortForwarding({machine: m}: {machine: Machine}) {
-	const action = useAction()
+	const action = useMachineAction()
+	const allMachines = useMachines().data ?? []
 	const forwards = m.portForwards ?? []
 	const [adding, setAdding] = useState(false)
 	const [hostPort, setHostPort] = useState('')
 	const [guestPort, setGuestPort] = useState('')
 	const [protocol, setProtocol] = useState<PortForward['protocol']>('tcp')
 	if (m.networkMode === 'bridged') return null
-	const taken = new Set(forwards.map((f) => `${f.protocol}:${f.hostPort}`))
-	const freePort = (wanted: number) => {
-		for (let p = wanted; p <= PORT_MAX; p++) if (!taken.has(`tcp:${p}`)) return p
-		return PORT_MIN
-	}
-	const save = (next: PortForward[], done: string) => {
+	const taken = takenPorts(allMachines, m)
+	const freePort = (wanted: number) => nextFreePort(wanted, taken, 'tcp')
+	const save = (next: PortForward[], done: string, onSuccess?: () => void) => {
 		haptic(8)
-		action.mutate({path: 'machines.updateSettings', input: {id: m.id, portForwards: next}, done})
+		action.mutate({path: 'machines.updateSettings', input: {id: m.id, portForwards: next}, done}, onSuccess ? {onSuccess} : undefined)
 	}
 	const host = typeof location !== 'undefined' ? location.hostname : 'your-backend'
 	const h = Number(hostPort)
 	const g = Number(guestPort)
-	const valid = Number.isInteger(h) && h >= PORT_MIN && h <= PORT_MAX && Number.isInteger(g) && g >= 1 && g <= 65_535 && !taken.has(`${protocol}:${h}`)
+	const inRange = Number.isInteger(h) && h >= PORT_MIN && h <= PORT_MAX
+	const portTaken = inRange && taken.has(`${protocol}:${h}`)
+	const valid = inRange && Number.isInteger(g) && g >= 1 && g <= 65_535 && !portTaken
 	const add = (hp: number, gp: number, proto: PortForward['protocol'], label: string) => {
 		const id = `fwd-${Date.now().toString(36)}`
-		save([...forwards, {id, protocol: proto, hostPort: hp, guestPort: gp}], `${label}: ${host}:${hp} now leads to ${m.name}`)
-		setAdding(false)
-		setHostPort('')
-		setGuestPort('')
+		save([...forwards, {id, protocol: proto, hostPort: hp, guestPort: gp}], `${label}: ${host}:${hp} now leads to ${m.name}`, () => {
+			setAdding(false)
+			setHostPort('')
+			setGuestPort('')
+		})
 	}
 	return (
 		<section className="pf">
@@ -113,7 +114,8 @@ export function PortForwarding({machine: m}: {machine: Machine}) {
 							</select>
 						</label>
 					</div>
-					{hostPort && !(h >= PORT_MIN && h <= PORT_MAX) && <p className="muted pf-note">The server port must be between 40000 and 49999.</p>}
+					{hostPort && !inRange && <p className="muted pf-note">The server port must be between 40000 and 49999.</p>}
+					{portTaken && <p className="muted pf-note">Port {h} is already forwarded.</p>}
 					<div className="pf-actions">
 						<button className="btn small" onClick={() => setAdding(false)}>
 							Cancel
