@@ -95,3 +95,28 @@ test('missing /assets, extension paths, and .well-known paths return 404 instead
 		assert.equal(res.status, 404, missing)
 	}
 })
+
+test('/api/rpc 405 answers include Allow and sign-in lockout 429 includes Retry-After (#449)', async (t) => {
+	const s = await startTestApp(t)
+	await s.signIn()
+
+	const wrongPost = await s.req('POST', '/api/rpc/user.get', {})
+	assert.equal(wrongPost.status, 405)
+	assert.equal(wrongPost.headers.get('allow'), 'GET')
+
+	const wrongGet = await s.req('GET', '/api/rpc/files.trash')
+	assert.equal(wrongGet.status, 405)
+	assert.equal(wrongGet.headers.get('allow'), 'POST')
+
+	// Successful signIn() cleared attempts; 10 bad attempts fill the window, so the 11th is 429.
+	for (let i = 0; i < 10; i++) {
+		const bad = await s.req('POST', '/api/auth/login', {username: 'Chris', password: 'wrong'})
+		assert.equal(bad.status, 401)
+	}
+	const locked = await s.req('POST', '/api/auth/login', {username: 'Chris', password: 'wrong'})
+	assert.equal(locked.status, 429)
+	const retryAfter = locked.headers.get('retry-after') ?? ''
+	assert.match(retryAfter, /^\d+$/)
+	const seconds = Number(retryAfter)
+	assert.ok(seconds >= 1 && seconds <= 300, `unexpected Retry-After: ${retryAfter}`)
+})

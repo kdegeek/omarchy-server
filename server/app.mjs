@@ -769,9 +769,11 @@ export function createApp({store, staticDir, fetchImpl = fetch, secureCookies = 
 		if (!backend) return res.status(409).json({error: {code: 'NOT_CONFIGURED', message: 'Connect to your server first'}})
 		const ip = req.ip ?? 'unknown'
 		const now = Date.now()
-		const recent = (attempts.get(ip) ?? []).filter((t) => now - t < 5 * 60 * 1000)
+		const LOGIN_WINDOW_MS = 5 * 60 * 1000
+		const recent = (attempts.get(ip) ?? []).filter((t) => now - t < LOGIN_WINDOW_MS)
 		if (recent.length >= 10) {
-			return res.status(429).json({error: {code: 'TOO_MANY_REQUESTS', message: 'Too many attempts. Wait a few minutes.'}})
+			const retryAfter = Math.max(1, Math.ceil((recent[0] + LOGIN_WINDOW_MS - now) / 1000))
+			return res.set('Retry-After', String(retryAfter)).status(429).json({error: {code: 'TOO_MANY_REQUESTS', message: 'Too many attempts. Wait a few minutes.'}})
 		}
 		attempts.set(ip, [...recent, now])
 
@@ -1838,7 +1840,7 @@ export function createApp({store, staticDir, fetchImpl = fetch, secureCookies = 
 		if (!Object.hasOwn(ALLOWED, path)) return res.status(404).json({error: {code: 'NOT_FOUND', message: `${path} is not available in Omarchy Server`}})
 		const kind = ALLOWED[path]
 		if ((kind === 'query') !== (req.method === 'GET')) {
-			return res.status(405).json({error: {code: 'METHOD_NOT_SUPPORTED', message: 'Wrong method'}})
+			return res.set('Allow', kind === 'query' ? 'GET' : 'POST').status(405).json({error: {code: 'METHOD_NOT_SUPPORTED', message: 'Wrong method'}})
 		}
 		let input
 		try {
