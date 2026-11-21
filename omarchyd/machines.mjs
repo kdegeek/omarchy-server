@@ -14,7 +14,7 @@ import {writeAtomic} from './atomic.mjs'
 import {execFile} from 'node:child_process'
 import {createHash, randomBytes} from 'node:crypto'
 import {constants, createWriteStream} from 'node:fs'
-import {access, copyFile, mkdir, readFile, readdir, rename, rm, statfs, stat, writeFile} from 'node:fs/promises'
+import {access, copyFile, lstat, mkdir, readFile, readdir, rename, rm, statfs, stat, writeFile} from 'node:fs/promises'
 import os from 'node:os'
 import {basename, join} from 'node:path'
 import {Readable} from 'node:stream'
@@ -95,6 +95,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 	// replace a damaged machines.json with this in-memory list.
 	let loaded = false
 	const busy = new Map() // id -> {state, progress, settling}
+	const activeBackups = new Set()
 	const isBusy = (id) => busy.has(id) && !busy.get(id).settling
 	const downloads = new Map() // imageId -> {progress, promise}
 	const failedImages = new Map() // imageId -> message
@@ -136,8 +137,26 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			}
 			await save().catch(() => {})
 		}
+		await cleanupIncompleteBackups()
 		autostart()
 	})()
+	const BACKUP_ID = /^[\w][\w.-]{0,150}$/
+	const BACKUP_FOLDER = /^\d+-[a-z0-9-]+-\d{8}-\d{6}(?:-\d+)?$/
+	async function cleanupIncompleteBackups() {
+		if (!files) return
+		try {
+			const {real: home} = await files.resolve('/Home')
+			const dir = join(home, 'Backups', 'Machines')
+			for (const e of await readdir(dir, {withFileTypes: true}).catch(() => [])) {
+				if (!e.isDirectory() || !BACKUP_ID.test(e.name)) continue
+				const full = join(dir, e.name)
+				if (await exists(join(full, 'machine.json'))) continue
+				if ((await exists(join(full, '.incomplete'))) || BACKUP_FOLDER.test(e.name)) {
+					await rm(full, {recursive: true, force: true}).catch(() => {})
+				}
+			}
+		} catch {}
+	}
 	const save = () => {
 		if (!loaded) throw new RpcError('PRECONDITION_FAILED', 'machines.json is damaged and was left unchanged')
 		return writeAtomic(stateFile, () => JSON.stringify({machines}, null, 2))
@@ -1438,7 +1457,6 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		await mkdir(dir, {recursive: true, mode: 0o700})
 		return dir
 	}
-	const BACKUP_ID = /^[\w][\w.-]{0,150}$/
 	async function listBackups(input = {}) {
 		await ready
 		const dir = await backupsDir()
@@ -1474,6 +1492,8 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		busy.set(m.id, {state: running ? 'running' : 'stopped', progress: 0})
 		// A folder of its own (never one that's already there, so a failure only removes its own).
 		await mkdir(target, {mode: 0o700})
+		await writeFile(join(target, '.incomplete'), '', {mode: 0o600})
+		activeBackups.add(id)
 		// Runs in the background (large disks take a while); progress shows on the machine, the
 		// result in its task history, and the backup is listed once complete.
 		task(m, 'backup', id, async () => {
@@ -1514,11 +1534,13 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 				}
 				// The settings, without task history or anything secret (no seed or answer file).
 				const machine = {...m, tasks: undefined, snapshots: undefined, answerIso: undefined, state: undefined, errorMessage: undefined, pending: undefined, hibernated: undefined, liveForwards: undefined}
-				await writeFile(join(target, 'machine.json'), JSON.stringify({format: 1, sourceId: m.id, createdAt: Date.now(), notes, live: running, machine, disks: disks.map((d) => d.id)}, null, 2), {mode: 0o600})
+				await writeAtomic(join(target, 'machine.json'), () => JSON.stringify({format: 1, sourceId: m.id, createdAt: Date.now(), notes, live: running, machine, disks: disks.map((d) => d.id)}, null, 2))
+				await rm(join(target, '.incomplete'), {force: true})
 			} catch (error) {
 				await rm(target, {recursive: true, force: true})
 				throw error
 			} finally {
+				activeBackups.delete(id)
 				busy.delete(m.id)
 			}
 		}).catch(() => {})
@@ -1528,8 +1550,10 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		await ready
 		const id = String(input.backupId ?? '')
 		if (!BACKUP_ID.test(id)) throw new RpcError('BAD_REQUEST', 'Bad backup')
+		if (activeBackups.has(id)) throw new RpcError('CONFLICT', 'That backup is still running')
 		const dir = join(await backupsDir(), id)
-		if (!(await exists(join(dir, 'machine.json')))) throw new RpcError('NOT_FOUND', 'That backup doesn’t exist')
+		const st = await lstat(dir).catch(() => null)
+		if (!st?.isDirectory()) throw new RpcError('NOT_FOUND', 'That backup doesn’t exist')
 		await rm(dir, {recursive: true, force: true})
 		return true
 	}

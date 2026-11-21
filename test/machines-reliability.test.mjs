@@ -830,6 +830,79 @@ test('#648: pre-0.4.0 machines without layout get backfilled at startup and all 
 	}
 })
 
+test('#660: interrupted backup folders are cleaned up on startup and deletable via deleteBackup', async (t) => {
+	const id = 'a1b2c3d4'
+	let releaseConvert = null
+	let convertStarted = null
+	const convertWait = new Promise((r) => (convertStarted = r))
+	const convertHold = new Promise((r) => (releaseConvert = r))
+	t.after(() => releaseConvert?.())
+
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd === 'virsh' && args.includes('list')) return ' Id   Name   State\n------------------\n'
+			if (cmd === 'qemu-img' && args[0] === 'convert') {
+				convertStarted()
+				await convertHold
+				throw new Error('aborted')
+			}
+			return ''
+		},
+	})
+	const homeDir = join(env.root, 'home')
+	const backupsDir = join(homeDir, 'Backups', 'Machines')
+	await mkdir(backupsDir, {recursive: true})
+	const files = {resolve: async (p) => ({real: p === '/Home' ? homeDir : join(homeDir, p.replace(/^\/Home\/?/, ''))})}
+
+	// Completed backup and unrelated folder must survive startup cleanup.
+	const completedDir = join(backupsDir, '100-box-20261119-010101')
+	await mkdir(completedDir, {recursive: true})
+	await writeFile(join(completedDir, 'machine.json'), JSON.stringify({format: 1, sourceId: id, createdAt: 1, machine: {name: 'Box', vmid: 100}}))
+	const notesDir = join(backupsDir, 'my-notes')
+	await mkdir(notesDir, {recursive: true})
+	await writeFile(join(notesDir, 'readme.txt'), 'keep me')
+	// An incomplete folder without machine.json can be removed explicitly via deleteBackup.
+	const manualIncomplete = join(backupsDir, 'incomplete-1')
+	await mkdir(manualIncomplete, {recursive: true})
+	await writeFile(join(manualIncomplete, 'disk0.qcow2'), 'part')
+
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [makeMachineRecord(env.dataDir, {id})]}))
+
+	const m1 = env.open({files})
+	await m1.ready
+
+	const {backupId: liveBackupId} = await m1.procedures['machines.backup'].run({id})
+	await convertWait
+
+	// Active running backup cannot be deleted by deleteBackup.
+	await assert.rejects(
+		() => m1.procedures['machines.deleteBackup'].run({backupId: liveBackupId}),
+		(err) => err instanceof RpcError && err.code === 'CONFLICT',
+	)
+	// Explicit deleteBackup works on an incomplete folder without machine.json, and still rejects missing ones.
+	assert.equal(await m1.procedures['machines.deleteBackup'].run({backupId: 'incomplete-1'}), true)
+	await assert.rejects(() => stat(manualIncomplete))
+	await assert.rejects(
+		() => m1.procedures['machines.deleteBackup'].run({backupId: 'does-not-exist'}),
+		(err) => err instanceof RpcError && err.code === 'NOT_FOUND',
+	)
+
+	// Simulate omarchyd restart while liveBackupId folder exists without machine.json.
+	const m2 = env.open({files})
+	await m2.ready
+
+	await assert.rejects(() => stat(join(backupsDir, liveBackupId)))
+	assert.equal(await stat(completedDir).then((s) => s.isDirectory()), true)
+	assert.equal(await readFile(join(notesDir, 'readme.txt'), 'utf8'), 'keep me')
+
+	releaseConvert()
+	await new Promise((r) => setTimeout(r, 30))
+})
+
+
 
 
 
