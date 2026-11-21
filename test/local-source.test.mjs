@@ -6,9 +6,10 @@ import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises'
 import os from 'node:os'
 import {join, resolve} from 'node:path'
 import {after, before, test} from 'node:test'
+import {fileURLToPath} from 'node:url'
 
 import {openAccounts} from '../omarchyd/accounts.mjs'
-import {localGitDir} from '../omarchyd/local-source.mjs'
+import {fileUrl, localGitDir} from '../omarchyd/local-source.mjs'
 import {startOmarchyd} from '../omarchyd/server.mjs'
 
 async function withEnv(vars, fn) {
@@ -206,6 +207,50 @@ test('OMARCHY_SERVER_APP_STORE is the default catalog and machines catalog', asy
 		const images = await (await fetch(`${d.url}/trpc/machines.osImages`, {headers: auth})).json()
 		assert.equal(fetched, 0, 'must not call GitHub for the machines catalog')
 		assert.equal(images.result.data[0].id, 'local-os')
+	} finally {
+		await d.close()
+	}
+})
+
+test('fileUrl percent-encodes #, ?, %, and spaces for URLs and git', async () => {
+	for (const p of ['/srv/my#store/machines/catalog.json', '/srv/what?/machines/catalog.json', '/srv/100%/machines/catalog.json', '/srv/a%20b/dir with spaces']) {
+		assert.equal(fileURLToPath(fileUrl(p)), resolve(p))
+	}
+	const encodedName = await initGit(join(root, 'a%20b'))
+	assert.match(git(['ls-remote', fileUrl(encodedName), 'HEAD'], root), /HEAD/)
+
+	const store = await initGit(join(root, 'my#store?100%'))
+	const arch = os.arch() === 'arm64' ? 'arm64' : 'amd64'
+	await mkdir(join(store, 'machines'), {recursive: true})
+	await writeFile(
+		join(store, 'machines', 'catalog.json'),
+		JSON.stringify({
+			version: 1,
+			images: [{id: 'special-os', familyId: 'debian', name: 'SpecialOS', version: '1', arch, kind: 'cloud', url: 'https://example.test/os.qcow2', checksums: {url: 'https://example.test/SHA256SUMS', algorithm: 'sha256'}, sizeMb: 1, adminGroup: 'sudo'}],
+		}),
+	)
+	const dataDir = join(root, 'special-store-data')
+	await mkdir(dataDir, {recursive: true})
+	const accounts = await openAccounts(dataDir)
+	await accounts.createOwner({name: 'Chris', password: 'correct horse'})
+	const d = await withEnv({OMARCHY_SERVER_APP_STORE: store}, () =>
+		startOmarchyd({
+			port: 0,
+			dataDir,
+			home: root,
+			updaterOptions: {autoCheck: false},
+			appOptions: {systemApps: null, run: async () => ''},
+			machineOptions: {
+				run: async () => '',
+				fetchImpl: async () => new Response('', {status: 503}),
+			},
+		}),
+	)
+	try {
+		const login = await (await fetch(`${d.url}/trpc/user.loginNative`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({userId: 'owner', password: 'correct horse', client: {id: 't'}})})).json()
+		const auth = {authorization: `Bearer ${login.result.data.accessToken}`}
+		const images = await (await fetch(`${d.url}/trpc/machines.osImages`, {headers: auth})).json()
+		assert.equal(images.result.data[0].id, 'special-os')
 	} finally {
 		await d.close()
 	}

@@ -3,6 +3,7 @@
 // a set isolation directive must not silently fall back to fetching GitHub.
 import {statSync} from 'node:fs'
 import {isAbsolute, join, resolve} from 'node:path'
+import {pathToFileURL} from 'node:url'
 
 const hint = (name) => (name === 'OMARCHY_SERVER_APP_STORE' ? 'use the GitHub app store' : 'update from GitHub')
 
@@ -31,4 +32,4 @@ export function localGitDir(name, raw) {
 	return resolve(path)
 }
 
-export const fileUrl = (path) => `file://${resolve(path)}`
+export const fileUrl = (path) => pathToFileURL(resolve(path)).href
