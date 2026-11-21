@@ -531,6 +531,16 @@ export async function iworkPreview(buf: ArrayBuffer): Promise<string | null> {
 
 // ---- zip listing -------------------------------------------------------------------------------
 export type ZipEntry = { name: string; dir: boolean; size: number; date?: Date };
+export function compareZipEntries(a: Pick<ZipEntry, "name" | "dir">, b: Pick<ZipEntry, "name" | "dir">): number {
+  const pa = a.name.replace(/\/$/, "").split("/");
+  const pb = b.name.replace(/\/$/, "").split("/");
+  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+    if (pa[i] !== pb[i]) return pa[i].localeCompare(pb[i]) || (pa[i] < pb[i] ? -1 : 1);
+  }
+  if (pa.length !== pb.length) return pa.length - pb.length;
+  if (a.dir !== b.dir) return (a.dir ? 1 : 0) - (b.dir ? 1 : 0);
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
 export async function listZip(buf: ArrayBuffer): Promise<ZipEntry[]> {
   const zip = await openZip(buf);
   const out: ZipEntry[] = [];
@@ -550,5 +560,5 @@ export async function listZip(buf: ArrayBuffer): Promise<ZipEntry[]> {
       const d = e.name.slice(0, i + 1);
       if (!dirs.has(d)) dirs.add(d), out.push({ name: d, dir: true, size: 0 });
     }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  return out.sort(compareZipEntries);
 }

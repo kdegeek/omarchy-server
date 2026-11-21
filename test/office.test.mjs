@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {after, before, test} from 'node:test'
 import JSZip from 'jszip'
 
-import {cleanNum, readXlsx} from '../web/src/screens/viewer/office.ts'
+import {cleanNum, listZip, readXlsx} from '../web/src/screens/viewer/office.ts'
 
 const unescapeXml = (s) =>
 	s.replace(/&(#x[0-9a-fA-F]+|#\d+|lt|gt|amp|quot|apos);/g, (_, e) => {
@@ -381,4 +381,29 @@ test('readXlsx formats built-in East Asian date and time numFmtIds 27-36 and 50-
 		sheets[0].rows[1],
 		timeIdx.map(([id]) => (timeHmsIds.has(id) ? '12:00:00' : '12:00')),
 	)
+})
+
+test('listZip keeps folder entries contiguous when folder names differ only by case', async () => {
+	const zip = new JSZip()
+	zip.file('a/b.txt', '1')
+	zip.file('a/B.txt', '2')
+	zip.file('A/d.txt', '3')
+	zip.file('Docs/readme.md', '4')
+	zip.file('docs/guide.md', '5')
+	zip.file('foo-bar/a.txt', '6')
+	zip.file('foo/z.txt', '7')
+	const entries = await listZip(await zip.generateAsync({type: 'arraybuffer'}))
+	const names = entries.map((e) => e.name)
+
+	// Every descendant must appear inside its folder's contiguous block, before the next top-level folder
+	const assertContiguous = (folder) => {
+		const idx = names.indexOf(folder)
+		assert.notEqual(idx, -1, `missing ${folder}`)
+		let end = idx + 1
+		while (end < names.length && names[end].startsWith(folder)) end++
+		for (let k = end; k < names.length; k++) {
+			assert.equal(names[k].startsWith(folder), false, `${names[k]} appeared outside ${folder}`)
+		}
+	}
+	for (const d of ['a/', 'A/', 'Docs/', 'docs/', 'foo/', 'foo-bar/']) assertContiguous(d)
 })
