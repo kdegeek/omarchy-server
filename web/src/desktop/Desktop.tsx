@@ -28,6 +28,7 @@ import {Onboarding} from './hyprland/Onboarding'
 import {desktopIconKeyAction, shouldClearDesktopSelection} from './desktopIcons'
 import {addStartingMachine, reconcileStartingMachines, type StartingMachine} from './machineStart'
 import {loadWallpaper} from './wallpaperLoader'
+import {clampWindowRect} from './windowGeometry'
 
 const HINT_KEY = 'omarchy-server:desk-hint-closed'
 
@@ -91,7 +92,7 @@ const snapRect = (snap: Exclude<Snap, null>): Rect => {
 	if (snap === 'right') return {x: a.x + Math.floor(a.w / 2), y: a.y, w: Math.ceil(a.w / 2), h: a.h}
 	return a
 }
-const rectOf = (win: Win): Rect => (win.snap ? snapRect(win.snap) : {x: win.x, y: win.y, w: win.w, h: win.h})
+const rectOf = (win: Win): Rect => (win.snap ? snapRect(win.snap) : clampWindowRect({x: win.x, y: win.y, w: win.w, h: win.h}, area(), {minW: MIN_W, minH: MIN_H}))
 
 const dockThickness = (cfg: DeskConfig) => cfg.dock.iconSize + 26 + (cfg.dock.floating ? 14 : 0)
 const reducedMotion = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
