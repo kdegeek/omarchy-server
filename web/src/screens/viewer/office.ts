@@ -114,13 +114,23 @@ export function formatExcelSerial(serial: number, kind: ExcelFormatKind, date190
     return kind === "dur-hms" ? `${sign}${h}:${pad2(m)}:${pad2(s)}` : `${sign}${h}:${pad2(m)}`;
   }
   const epoch = date1904 ? 24107 : 25569;
-  const d = new Date(Math.round((serial - epoch) * 86400 * 1000));
-  if (Number.isNaN(d.getTime())) return String(serial);
-  const iso = d.toISOString();
-  const day = iso.slice(0, 10);
+  const totalSec = Math.round(serial * 86400);
+  const daySerial = kind === "date" ? Math.floor(serial) : Math.floor(totalSec / 86400);
+  let day: string;
+  if (!date1904 && daySerial === 60) {
+    day = "1900-02-29";
+  } else {
+    const adj = !date1904 && daySerial < 60 ? daySerial + 1 : daySerial;
+    const d = new Date((adj - epoch) * 86400 * 1000);
+    if (Number.isNaN(d.getTime())) return String(serial);
+    day = d.toISOString().slice(0, 10);
+  }
   if (kind === "date") return day;
-  const time = iso.slice(11, 16);
-  return serial < 1 ? time : `${day} ${time}`;
+  const secOfDay = ((totalSec % 86400) + 86400) % 86400;
+  const hh = pad2(Math.floor(secOfDay / 3600));
+  const mm = pad2(Math.floor((secOfDay % 3600) / 60));
+  const time = `${hh}:${mm}`;
+  return serial >= 0 && serial < 1 ? time : `${day} ${time}`;
 }
 const cleanNum = (v: string) => {
   const n = Number(v);

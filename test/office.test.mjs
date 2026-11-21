@@ -239,3 +239,48 @@ test('readXlsx honours workbookPr date1904 without shifting durations', async ()
 	const s1904Off = await readXlsx(await makeXlsx({workbookXml: wbWith('<workbookPr date1904="0"/>'), stylesXml, sheetXml}))
 	assert.deepEqual(s1904Off[0].rows, [['2020-01-01', '36:00']])
 })
+
+test('readXlsx handles the 1900 leap-year serial quirk without shifting 1904 workbooks', async () => {
+	const stylesXml =
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+		'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+		'<cellXfs count="2"><xf numFmtId="14"/><xf numFmtId="22"/></cellXfs>' +
+		'</styleSheet>'
+	const s1900 = await readXlsx(
+		await makeXlsx({
+			stylesXml,
+			sheetXml:
+				'<?xml version="1.0" encoding="UTF-8"?>' +
+				'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+				'<row r="1">' +
+				'<c r="A1" s="0"><v>1</v></c>' +
+				'<c r="B1" s="0"><v>59</v></c>' +
+				'<c r="C1" s="0"><v>60</v></c>' +
+				'<c r="D1" s="0"><v>61</v></c>' +
+				'<c r="E1" s="1"><v>60.5</v></c>' +
+				'</row></sheetData></worksheet>',
+		}),
+	)
+	assert.deepEqual(s1900[0].rows, [['1900-01-01', '1900-02-28', '1900-02-29', '1900-03-01', '1900-02-29 12:00']])
+
+	const s1904 = await readXlsx(
+		await makeXlsx({
+			workbookXml:
+				'<?xml version="1.0" encoding="UTF-8"?>' +
+				'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+				'<workbookPr date1904="1"/>' +
+				'<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+			stylesXml,
+			sheetXml:
+				'<?xml version="1.0" encoding="UTF-8"?>' +
+				'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+				'<row r="1">' +
+				'<c r="A1" s="0"><v>0</v></c>' +
+				'<c r="B1" s="0"><v>1</v></c>' +
+				'<c r="C1" s="0"><v>59</v></c>' +
+				'<c r="D1" s="0"><v>60</v></c>' +
+				'</row></sheetData></worksheet>',
+		}),
+	)
+	assert.deepEqual(s1904[0].rows, [['1904-01-01', '1904-01-02', '1904-02-29', '1904-03-01']])
+})
