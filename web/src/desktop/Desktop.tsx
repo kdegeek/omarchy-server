@@ -26,6 +26,7 @@ import {Launcher} from './hyprland/Launcher'
 import {GAP, collapse, contains, firstLeaf, flipSplit, focusDir, insert as insertTile, isNode, reconcile, rects as tileRectsOf, remove as removeTile, swapDir, type Node} from './hyprland/layout'
 import {Onboarding} from './hyprland/Onboarding'
 import {desktopIconKeyAction, shouldClearDesktopSelection} from './desktopIcons'
+import {addStartingMachine, reconcileStartingMachines, type StartingMachine} from './machineStart'
 
 const HINT_KEY = 'omarchy-server:desk-hint-closed'
 
@@ -186,7 +187,7 @@ export function useItems() {
 		},
 		[appList, machineList, owner, apps.isSuccess, machines.isSuccess],
 	)
-	return {info, appList, machineList, owner}
+	return {info, appList, machineList, machinesUpdatedAt: machines.dataUpdatedAt, owner}
 }
 
 // ---- can an app be shown inside a window? --------------------------------------------------------
@@ -282,7 +283,9 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 	useViewport()
 	const user = useUser()
 	const [cfg, setCfg] = useDeskConfig()
-	const {info, appList, machineList, owner} = useItems()
+	const {info, appList, machineList, machinesUpdatedAt, owner} = useItems()
+	const machinesUpdatedAtRef = useRef(machinesUpdatedAt)
+	machinesUpdatedAtRef.current = machinesUpdatedAt
 	const [wins, setWins] = useState<Win[]>(() => load<Win[]>(STORE_KEY, []).filter((w) => w.kind !== 'terminal' && w.kind !== 'console'))
 	const [overview, setOverview] = useState<null | 'windows' | 'apps'>(null)
 	const [topMenu, setTopMenu] = useState<null | 'clock' | 'system'>(null)
@@ -291,7 +294,7 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 	const [shareFor, setShareFor] = useState<{path: string; name: string} | null>(null)
 	const [preview, setPreview] = useState<Rect | null>(null)
 	const [dragging, setDragging] = useState(false)
-	const [starting, setStarting] = useState<string[]>([])
+	const [starting, setStarting] = useState<StartingMachine[]>([])
 	const hypr = cfg.shell === 'hyprland'
 	const [hyprWs, setHyprWs] = useState(() => loadLayout().workspace)
 	const [trees, setTrees] = useState<Record<number, Node | null>>(() => loadLayout().trees)
@@ -475,12 +478,12 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 	// Starting a stopped machine from its icon: start it, then open the console once it's running.
 	useEffect(() => {
 		if (!starting.length) return
-		const ready = starting.filter((id) => machineList.find((m) => m.id === id)?.state === 'running')
-		if (ready.length) {
-			setStarting((s) => s.filter((id) => !ready.includes(id)))
+		const {ready, dropped, remaining} = reconcileStartingMachines(starting, machineList, machinesUpdatedAt)
+		if (ready.length || dropped.length) {
+			setStarting(remaining)
 			ready.forEach((id) => open('console', {machineId: id}))
 		}
-	}, [machineList, starting, open])
+	}, [machineList, machinesUpdatedAt, starting, open])
 	useEffect(() => {
 		if (!starting.length) return
 		const t = window.setInterval(() => qc.invalidateQueries({queryKey: ['machines.list']}), 3000)
@@ -539,7 +542,8 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 						mutate('machines.start', {id})
 							.then(() => {
 								toast(`Starting ${m.name}. Its console opens when it’s ready.`)
-								setStarting((s) => [...new Set([...s, id])])
+								setStarting((s) => addStartingMachine(s, id, machinesUpdatedAtRef.current))
+								qc.invalidateQueries({queryKey: ['machines.list']})
 							})
 							.catch((e) => toast((e as Error).message, true))
 						return
@@ -557,7 +561,7 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 			pin: (key) => setCfg((c) => (c.dock.items.includes(key) ? c : {...c, dock: {...c.dock, items: [...c.dock.items, key]}})),
 			unpin: (key) => setCfg((c) => ({...c, dock: {...c.dock, items: c.dock.items.filter((k) => k !== key)}})),
 		}
-	}, [open, close, appList, machineList, setCfg, toast, boot.server])
+	}, [open, close, appList, machineList, setCfg, toast, boot.server, qc])
 	// "Open Terminal" buttons elsewhere (e.g. a one-time fix for network shares): a new terminal window.
 	useEffect(() => {
 		const onOpen = (e: Event) => api.openTerminal(undefined, (e as CustomEvent<string>).detail)
