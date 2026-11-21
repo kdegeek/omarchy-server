@@ -237,6 +237,7 @@ export async function openAccounts(dataDir) {
 			if (!u || !secret) throw new RpcError('BAD_REQUEST', 'Scan the code again')
 			if (!totpOk(secret, totpToken)) throw new RpcError('BAD_REQUEST', 'That code isn’t right. Enter the one your app shows now.')
 			u.totp = secret.toString('base64')
+			usedSteps.delete(userId)
 			await save()
 		},
 		async disable2fa(userId, {totpToken} = {}) {
@@ -244,6 +245,7 @@ export async function openAccounts(dataDir) {
 			if (!u?.totp) return
 			if (!totpOk(Buffer.from(u.totp, 'base64'), totpToken)) throw new RpcError('BAD_REQUEST', 'That code isn’t right. Enter the one your app shows now.')
 			delete u.totp
+			usedSteps.delete(userId)
 			await save()
 		},
 		// Factory reset: every account and sign-in goes; the next visit starts first-time setup.

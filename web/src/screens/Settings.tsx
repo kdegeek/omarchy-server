@@ -15,6 +15,7 @@ import {StoragePage} from './Storage'
 import {BackupsPage} from '../backups'
 import {UnraidPage} from '../unraid'
 import {WhatsNewSheet, allReleases} from '../WhatsNew'
+import {TOTP_URI_QUERY_OPTIONS, clearTotpSetupUri} from './settingsHelpers'
 
 function useQ<T>(path: string, input?: unknown, opts: {enabled?: boolean; refetchInterval?: number | false; staleTime?: number; refetchOnWindowFocus?: boolean; refetchOnReconnect?: boolean} = {}) {
 	return useQuery({queryKey: [path, input], queryFn: () => query<T>(path, input), retry: false, staleTime: 15_000, ...opts})
@@ -1038,13 +1039,18 @@ function PasswordSheet({open, onClose}: {open: boolean; onClose: () => void}) {
 }
 
 function TwoFactorSheet({open, enabled, onClose}: {open: boolean; enabled: boolean; onClose: () => void}) {
+	const qc = useQueryClient()
 	const save = useSave()
 	const toast = useToast()
 	// One setup key for the whole setup: fetching again (e.g. after switching to the authenticator
 	// app and back) would make a new key, and the code from the app would never match.
-	const uri = useQ<string>('user.generateTotpUri', undefined, {enabled: open && !enabled, staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false})
+	const uri = useQ<string>('user.generateTotpUri', undefined, {enabled: open && !enabled, ...TOTP_URI_QUERY_OPTIONS})
 	const [code, setCode] = useState('')
-	useEffect(() => setCode(''), [open])
+	useEffect(() => {
+		setCode('')
+		if (!open) clearTotpSetupUri(qc)
+	}, [open, qc])
+	useEffect(() => () => clearTotpSetupUri(qc), [qc])
 	const secret = uri.data ? (new URL(uri.data).searchParams.get('secret') ?? '') : ''
 	const done = {refresh: ['user.is2faEnabled']}
 	return (
@@ -1062,7 +1068,12 @@ function TwoFactorSheet({open, enabled, onClose}: {open: boolean; enabled: boole
 					enabled
 						? {path: 'user.disable2fa', input: {totpToken: code.replace(/\s/g, '')}, done: 'Two-factor is off', ...done}
 						: {path: 'user.enable2fa', input: {totpUri: uri.data, totpToken: code.replace(/\s/g, '')}, done: 'Two-factor is on', ...done},
-					{onSuccess: onClose},
+					{
+						onSuccess: () => {
+							clearTotpSetupUri(qc)
+							onClose()
+						},
+					},
 				)
 			}
 		>
