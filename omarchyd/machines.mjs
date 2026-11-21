@@ -1497,10 +1497,19 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		const fs = await statfs(dir)
 		if ((fs.bavail * fs.bsize) / 1024 ** 3 < required + 1) throw new RpcError('PRECONDITION_FAILED', `Not enough free space for the backup (about ${Math.ceil(required)} GB)`)
 		busy.set(m.id, {state: running ? 'running' : 'stopped', progress: 0})
-		// A folder of its own (never one that's already there, so a failure only removes its own).
-		await mkdir(target, {mode: 0o700})
-		await writeFile(join(target, '.incomplete'), '', {mode: 0o600})
 		activeBackups.add(id)
+		let created = false
+		try {
+			// A folder of its own (never one that's already there, so a failure only removes its own).
+			await mkdir(target, {mode: 0o700})
+			created = true
+			await writeFile(join(target, '.incomplete'), '', {mode: 0o600})
+		} catch (error) {
+			busy.delete(m.id)
+			activeBackups.delete(id)
+			if (created) await rm(target, {recursive: true, force: true}).catch(() => {})
+			throw error
+		}
 		// Runs in the background (large disks take a while); progress shows on the machine, the
 		// result in its task history, and the backup is listed once complete.
 		task(m, 'backup', id, async () => {

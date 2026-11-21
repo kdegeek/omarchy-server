@@ -1,6 +1,6 @@
 // Reliability fixes for omarchyd machines and machine settings UI.
 import assert from 'node:assert/strict'
-import {mkdir, mkdtemp, readFile, rm, stat, statfs, writeFile} from 'node:fs/promises'
+import {chmod, mkdir, mkdtemp, readFile, rm, stat, statfs, writeFile} from 'node:fs/promises'
 import os from 'node:os'
 import {join} from 'node:path'
 import {test} from 'node:test'
@@ -981,15 +981,62 @@ test('#664: protection, onBoot, startup order, notes, and rename apply without m
 	assert.equal((await m.procedures['machines.details'].run({id})).pending, true)
 })
 
+test('#311: backup folder creation failure clears busy state so machine stays usable', async (t) => {
+	const id = 'a1b2c3d4'
+	const doms = new Map()
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd === 'virsh') {
+				const a = args[0] === '-c' ? args.slice(2) : args
+				if (a[0] === 'list') {
+					return ` Id   Name   State\n------------------\n${[...doms].map(([n, s]) => ` -    ${n}   ${s}`).join('\n')}\n`
+				}
+				if (a[0] === 'define') {
+					const xmlText = await readFile(a[1], 'utf8')
+					const name = /<name>(.+?)<\/name>/.exec(xmlText)[1]
+					if (!doms.has(name)) doms.set(name, 'shut off')
+					return ''
+				}
+				if (a[0] === 'start') {
+					doms.set(a[1], 'running')
+					return ''
+				}
+				if (a[0] === 'destroy') {
+					doms.set(a[1], 'shut off')
+					return ''
+				}
+			}
+			if (cmd === 'qemu-img' && args[0] === 'convert') {
+				await writeFile(args.at(-1), 'backup-ok')
+			}
+			return ''
+		},
+	})
+	const homeDir = join(env.root, 'home')
+	const backupsDir = join(homeDir, 'Backups', 'Machines')
+	await mkdir(backupsDir, {recursive: true})
+	const files = {resolve: async (p) => ({real: p === '/Home' ? homeDir : join(homeDir, p.replace(/^\/Home\/?/, ''))})}
 
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [makeMachineRecord(env.dataDir, {id})]}))
 
+	const m = env.open({files})
+	await m.ready
 
+	t.after(() => chmod(backupsDir, 0o700).catch(() => {}))
+	await chmod(backupsDir, 0o500)
 
+	await assert.rejects(() => m.procedures['machines.backup'].run({id}), /EACCES|permission denied/i)
+	assert.equal(await m.procedures['machines.start'].run({id}), true)
 
-
-
-
-
-
-
-
+	await chmod(backupsDir, 0o700)
+	await m.procedures['machines.forceStop'].run({id})
+	const {backupId} = await m.procedures['machines.backup'].run({id})
+	const end = Date.now() + 5000
+	while (!(await m.procedures['machines.backups'].run({id})).some((b) => b.id === backupId)) {
+		if (Date.now() > end) throw new Error('backup did not finish after restoring permissions')
+		await new Promise((r) => setTimeout(r, 20))
+	}
+})
