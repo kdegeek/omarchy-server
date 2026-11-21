@@ -21,7 +21,7 @@ import {LockChip, WorkspacePills} from './hyprland/Bar'
 import {Cheatsheet} from './hyprland/Cheatsheet'
 import {injectConsoleKey, keysymFromEvent, lastMinimizedOn, releaseConsoleSuper, topVisibleWindow} from './hyprland/consoleBridge'
 import {CAPTURE_KEY, ONBOARDING_KEY, canUseKeyboardLock, chipIntent, keyboardLockApi, onCaptureModeChange, onFullscreenChange, resolveMode, toggleLock, type GrabState} from './hyprland/grab'
-import {isSuper, resolveHyprKey, type Action} from './hyprland/keymap'
+import {isSuper, resolveHyprKey, shouldRunAction, type Action} from './hyprland/keymap'
 import {Launcher} from './hyprland/Launcher'
 import {GAP, collapse, contains, firstLeaf, flipSplit, focusDir, insert as insertTile, isNode, moveWorkspace, reconcile, rects as tileRectsOf, remove as removeTile, swapDir, type Node} from './hyprland/layout'
 import {Onboarding} from './hyprland/Onboarding'
@@ -662,7 +662,7 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 			superAlone = e.key === 'Meta' || e.key === 'OS'
 			if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 't' && owner) {
 				e.preventDefault()
-				api.openTerminal()
+				if (!e.repeat) api.openTerminal()
 				if (cfg.shell === 'hyprland') return
 			}
 			if (cfg.shell === 'hyprland') {
@@ -672,6 +672,7 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 				if (res?.kind === 'grab-toggle') {
 					e.preventDefault()
 					e.stopPropagation()
+					if (e.repeat) return
 					releaseLastConsole()
 					setGrab((s) => toggleLock(s, e.code === 'F12' ? 'f12' : 'scroll'))
 					return
@@ -688,7 +689,7 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 				if (res?.kind === 'action') {
 					e.preventDefault()
 					e.stopPropagation()
-					runHyprRef.current(res.action)
+					if (shouldRunAction(res.action, e.repeat)) runHyprRef.current(res.action)
 					return
 				}
 			}

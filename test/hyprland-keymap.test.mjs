@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import {describe, test} from 'node:test'
 
-import {actionOf, resolveHyprKey} from '../web/src/desktop/hyprland/keymap.ts'
+import {actionOf, isRepeatableAction, resolveHyprKey, shouldRunAction} from '../web/src/desktop/hyprland/keymap.ts'
 
 const e = (code, extra = {}) => ({code, key: extra.key ?? code, metaKey: extra.meta ?? false, altKey: !!extra.alt, shiftKey: !!extra.shift, ctrlKey: !!extra.ctrl, ...extra})
 const superE = (code, extra = {}) => e(code, {meta: true, ...extra})
@@ -62,5 +62,41 @@ describe('hyprland keymap', () => {
 		assert.ok(hyprIdx !== -1, 'Desktop.tsx must use resolveHyprKey')
 		assert.ok(escIdx !== -1, 'Desktop.tsx must retain generic Escape handler')
 		assert.ok(hyprIdx < escIdx, 'Hyprland shortcuts must be handled before generic Escape cleanup')
+	})
+
+	test('key repeat is ignored for one-shot actions and allowed for focus/swap navigation', () => {
+		const oneShot = [
+			{type: 'terminal'},
+			{type: 'close'},
+			{type: 'system-menu'},
+			{type: 'launcher'},
+			{type: 'cheatsheet'},
+			{type: 'fullscreen'},
+			{type: 'float'},
+			{type: 'split'},
+			{type: 'minimize'},
+			{type: 'restore'},
+			{type: 'grab-toggle'},
+			{type: 'files'},
+			{type: 'apps'},
+			{type: 'workspace', n: 2},
+			{type: 'move-workspace', n: 2},
+			{type: 'workspace-next'},
+			{type: 'workspace-prev'},
+		]
+		for (const act of oneShot) {
+			assert.equal(isRepeatableAction(act), false, `${act.type} should not repeat`)
+			assert.equal(shouldRunAction(act, false), true, `${act.type} runs on initial press`)
+			assert.equal(shouldRunAction(act, true), false, `${act.type} ignores repeat`)
+		}
+		for (const act of [{type: 'focus', dir: 'left'}, {type: 'swap', dir: 'right'}]) {
+			assert.equal(isRepeatableAction(act), true, `${act.type} may repeat`)
+			assert.equal(shouldRunAction(act, false), true)
+			assert.equal(shouldRunAction(act, true), true)
+		}
+		assert.equal(shouldRunAction(null, false), false)
+		assert.equal(shouldRunAction(null, true), false)
+		assert.deepEqual(resolveHyprKey(superE('Enter', {repeat: true}), {consoleFocused: false}), {kind: 'action', action: {type: 'terminal'}})
+		assert.deepEqual(resolveHyprKey(superE('KeyQ', {repeat: true}), {consoleFocused: true}), {kind: 'console-forward'})
 	})
 })

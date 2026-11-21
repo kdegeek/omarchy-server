@@ -27,6 +27,7 @@ export type KeyLike = {
 	altKey: boolean
 	shiftKey: boolean
 	ctrlKey: boolean
+	repeat?: boolean
 }
 
 const ARROW: Record<string, Dir> = {ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down'}
@@ -79,4 +80,12 @@ export function resolveHyprKey(e: KeyLike, opts: {consoleFocused: boolean} = {co
 	if (opts.consoleFocused && isSuper(e) && !act) return {kind: 'console-forward'}
 	if (act) return {kind: 'action', action: act}
 	return null
+}
+
+export function isRepeatableAction(act: Action): boolean {
+	return act.type === 'focus' || act.type === 'swap'
+}
+
+export function shouldRunAction(act: Action | null, repeat = false): boolean {
+	return act !== null && (!repeat || isRepeatableAction(act))
 }
