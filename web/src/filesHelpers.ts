@@ -171,4 +171,86 @@ export function handleFileDrop(e: FileDragEventLike, canUpload: boolean): boolea
 	return canUpload
 }
 
+export type UploadFileItem = {file: File; rel?: string}
+export type UploadBatch = {files: UploadFileItem[]; dirs: string[]}
+export type DropEntryLike = {
+	name: string
+	isFile: boolean
+	isDirectory: boolean
+	file?: (ok: (file: File) => void, err: (e: unknown) => void) => void
+	createReader?: () => {readEntries: (ok: (entries: DropEntryLike[]) => void, err: (e: unknown) => void) => void}
+}
+export type FileHandleLike = {
+	kind: 'file'
+	name: string
+	getFile: () => Promise<File>
+}
+export type DirectoryHandleLike = {
+	kind: 'directory'
+	name: string
+	values: () => AsyncIterable<FileHandleLike | DirectoryHandleLike>
+}
+
+/** Collect all unique relative directory paths (including empty folders), sorted shallowest first. */
+export function collectUploadDirs(items: readonly UploadFileItem[], extraDirs: readonly string[] = []): string[] {
+	const set = new Set<string>()
+	const addAncestors = (dirPath: string) => {
+		const parts = dirPath.split('/').filter(Boolean)
+		for (let i = 0; i < parts.length; i++) set.add(parts.slice(0, i + 1).join('/'))
+	}
+	for (const it of items) {
+		const parts = (it.rel ?? '').split('/').filter(Boolean)
+		if (parts.length > 1) addAncestors(parts.slice(0, -1).join('/'))
+	}
+	for (const d of extraDirs) addAncestors(d)
+	return [...set].sort((a, b) => a.split('/').length - b.split('/').length)
+}
+
+/** Walk dropped DataTransfer FileSystemEntry items, preserving empty subdirectories. */
+export async function readDroppedEntries(entries: readonly DropEntryLike[]): Promise<UploadBatch> {
+	const files: UploadFileItem[] = []
+	const dirs: string[] = []
+	const walk = async (entry: DropEntryLike, prefix: string): Promise<void> => {
+		if (entry.isFile && entry.file) {
+			const file = await new Promise<File>((res, rej) => entry.file!(res, rej))
+			files.push({file, rel: prefix ? `${prefix}/${file.name}` : undefined})
+		} else if (entry.isDirectory && entry.createReader) {
+			const path = prefix ? `${prefix}/${entry.name}` : entry.name
+			dirs.push(path)
+			const reader = entry.createReader()
+			for (;;) {
+				const batch = await new Promise<DropEntryLike[]>((res, rej) => reader.readEntries(res, rej))
+				if (!batch.length) break
+				for (const child of batch) await walk(child, path)
+			}
+		}
+	}
+	for (const e of entries) await walk(e, '')
+	return {files, dirs}
+}
+
+/** Call window.showDirectoryPicker as a method on win so Chromium does not throw Illegal invocation. */
+export function pickDirectoryFromWindow(win: {showDirectoryPicker?: () => Promise<DirectoryHandleLike>}): Promise<DirectoryHandleLike> | null {
+	return win.showDirectoryPicker ? win.showDirectoryPicker() : null
+}
+
+/** Walk a picked FileSystemDirectoryHandle tree, preserving empty subdirectories. */
+export async function readDirectoryHandle(root: DirectoryHandleLike): Promise<UploadBatch> {
+	const files: UploadFileItem[] = []
+	const dirs: string[] = []
+	const walk = async (dir: DirectoryHandleLike, prefix: string): Promise<void> => {
+		dirs.push(prefix)
+		for await (const child of dir.values()) {
+			if (child.kind === 'file') {
+				const file = await child.getFile()
+				files.push({file, rel: `${prefix}/${file.name}`})
+			} else if (child.kind === 'directory') {
+				await walk(child, `${prefix}/${child.name}`)
+			}
+		}
+	}
+	await walk(root, root.name)
+	return {files, dirs}
+}
+
 export type {FileEntry}

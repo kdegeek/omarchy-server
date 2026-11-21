@@ -318,3 +318,98 @@ describe('files screen: #492 prevent file drop navigation in non-uploadable view
 		assert.match(src, /handleFileDrop\(e, canUpload && !!uploadDir\)/)
 	})
 })
+
+describe('files screen: #493 create empty folders on folder drop or pick', () => {
+	const fakeFile = (name, size = 4) => ({name, size})
+
+	const mockFileEntry = (name) => ({
+		name,
+		isFile: true,
+		isDirectory: false,
+		file: (ok) => ok(fakeFile(name)),
+	})
+
+	const mockDirEntry = (name, children) => ({
+		name,
+		isFile: false,
+		isDirectory: true,
+		createReader: () => {
+			let sent = false
+			return {
+				readEntries: (ok) => {
+					if (sent) return ok([])
+					sent = true
+					ok(children)
+				},
+			}
+		},
+	})
+
+	test('collectUploadDirs includes empty subfolders and sorts shallowest-first', () => {
+		const dirs = helpers.collectUploadDirs(
+			[{file: fakeFile('a.txt'), rel: 'proj/src/a.txt'}],
+			['proj/empty/deep', 'proj/logs'],
+		)
+		assert.deepEqual(dirs, ['proj', 'proj/src', 'proj/empty', 'proj/logs', 'proj/empty/deep'])
+	})
+
+	test('readDroppedEntries collects empty subdirectories and completely empty dropped folders', async () => {
+		const proj = mockDirEntry('proj', [
+			mockFileEntry('a.txt'),
+			mockDirEntry('logs', []),
+			mockDirEntry('tmp', [mockDirEntry('sub', [])]),
+		])
+		const batch = await helpers.readDroppedEntries([proj])
+		assert.deepEqual(batch.files.map((f) => f.rel), ['proj/a.txt'])
+		assert.deepEqual(batch.dirs, ['proj', 'proj/logs', 'proj/tmp', 'proj/tmp/sub'])
+
+		const emptyOnly = await helpers.readDroppedEntries([mockDirEntry('empty', [])])
+		assert.equal(emptyOnly.files.length, 0)
+		assert.deepEqual(emptyOnly.dirs, ['empty'])
+	})
+
+	test('readDirectoryHandle collects files and empty subdirectories', async () => {
+		const mockFileHandle = (name) => ({
+			kind: 'file',
+			name,
+			getFile: async () => fakeFile(name),
+		})
+		const mockDirHandle = (name, children) => ({
+			kind: 'directory',
+			name,
+			async *values() {
+				for (const c of children) yield c
+			},
+		})
+		const root = mockDirHandle('root', [
+			mockFileHandle('readme.txt'),
+			mockDirHandle('emptyA', []),
+			mockDirHandle('nested', [mockDirHandle('emptyB', [])]),
+		])
+		const batch = await helpers.readDirectoryHandle(root)
+		assert.deepEqual(batch.files.map((f) => f.rel), ['root/readme.txt'])
+		assert.deepEqual(batch.dirs, ['root', 'root/emptyA', 'root/nested', 'root/nested/emptyB'])
+	})
+
+	test('Files.tsx wires readDroppedEntries, readDirectoryHandle, collectUploadDirs, and empty-folder uploads', async () => {
+		const src = await filesSource()
+		assert.match(src, /readDroppedEntries/)
+		assert.match(src, /readDirectoryHandle/)
+		assert.match(src, /collectUploadDirs\(items, extraDirs\)/)
+		assert.match(src, /if \(!items\.length && !dirs\.length\) return;/)
+		assert.match(src, /showDirectoryPicker/)
+		assert.match(src, /pickDirectoryFromWindow\(win\)/)
+	})
+
+	test('pickDirectoryFromWindow preserves window as this receiver', async () => {
+		const expectedHandle = {kind: 'directory', name: 'root', async *values() {}}
+		const fakeWin = {
+			async showDirectoryPicker() {
+				if (this !== fakeWin) throw new TypeError('Illegal invocation')
+				return expectedHandle
+			},
+		}
+		assert.equal(await helpers.pickDirectoryFromWindow(fakeWin), expectedHandle)
+		assert.equal(helpers.pickDirectoryFromWindow({}), null)
+	})
+})
