@@ -43,3 +43,37 @@ describe('files: #97 folders stay before files in descending sort', () => {
 		assert.deepEqual(pagedModifiedDesc.files.map((x) => x.name), ['Beta', 'Alpha'])
 	})
 })
+
+describe('files: #113 favorites return real entry metadata', () => {
+	test('files.favorites returns FileEntry metadata for favorited files and folders', async (t) => {
+		const scratch = await realpath(await mkdtemp(join(os.tmpdir(), 'omarchy-favs-')))
+		t.after(() => rm(scratch, {recursive: true, force: true}))
+		const h = join(scratch, 'home')
+		const d = join(scratch, 'data')
+		await mkdir(join(h, 'Documents'), {recursive: true})
+		await mkdir(d, {recursive: true})
+		await writeFile(join(h, 'Documents', 'notes.txt'), 'hello')
+
+		const f = createFiles({home: h, dataDir: d})
+		const run = (name, input) => f.procedures[name].run(input)
+
+		await run('files.addFavorite', {path: '/Home/Documents/notes.txt'})
+		await run('files.addFavorite', {path: '/Home/Documents'})
+
+		const favs = await run('files.favorites')
+		assert.equal(favs.length, 2)
+		const fileFav = favs.find((x) => x.path === '/Home/Documents/notes.txt')
+		const dirFav = favs.find((x) => x.path === '/Home/Documents')
+		assert.equal(fileFav?.name, 'notes.txt')
+		assert.equal(fileFav?.type, 'text/plain')
+		assert.equal(fileFav?.size, 5)
+		assert.ok(fileFav?.operations?.includes('favorite'))
+		assert.equal(dirFav?.name, 'Documents')
+		assert.equal(dirFav?.type, 'directory')
+		assert.equal(dirFav?.size, undefined)
+
+		await rm(join(h, 'Documents', 'notes.txt'))
+		const remaining = await run('files.favorites')
+		assert.deepEqual(remaining.map((x) => x.path), ['/Home/Documents'])
+	})
+})

@@ -27,7 +27,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
-import { batchToastMessage, canSubmitNamePrompt, nextSearchSelection, runFileBatch } from "../filesHelpers";
+import { batchToastMessage, canSubmitNamePrompt, type FavoriteItem, favoritePath, nextSearchSelection, runFileBatch } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -416,7 +416,7 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
   });
   const favorites = useQuery({
     queryKey: ["files.favorites"],
-    queryFn: () => query<string[]>("files.favorites"),
+    queryFn: () => query<FavoriteItem[]>("files.favorites"),
   });
   const owner = user.data != null && user.data.role !== "member";
   const shares = useQuery({
@@ -432,7 +432,7 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
     enabled: q.trim().length >= 2,
     staleTime: 10_000,
   });
-  const favSet = useMemo(() => new Set(favorites.data ?? []), [favorites.data]);
+  const favSet = useMemo(() => new Set((favorites.data ?? []).map(favoritePath)), [favorites.data]);
   const shareMap = useMemo(
     () => new Map((shares.data ?? []).map((s) => [s.path, s])),
     [shares.data],
@@ -506,13 +506,13 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
         : path === "::favorites"
           ? (favorites.data ?? []).map(
               (p) =>
-                ({
+                (typeof p === "string" ? {
                   name: baseName(p) || p,
                   path: p,
                   type: "directory",
                   modified: 0,
                   operations: ["favorite"],
-                }) as FileEntry,
+                } : p) as FileEntry,
             )
           : (listing.data?.files ?? []);
   const loading =

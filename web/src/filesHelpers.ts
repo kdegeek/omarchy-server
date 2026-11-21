@@ -72,4 +72,11 @@ export function nextSearchSelection(selected: Set<string>, prevQuery: string, ne
 	return new Set()
 }
 
+export type FavoriteItem = FileEntry | string
+
+/** Extract the virtual path from either a FileEntry or a legacy favorite path string. */
+export function favoritePath(item: FavoriteItem): string {
+	return typeof item === 'string' ? item : item.path
+}
+
 export type {FileEntry}
