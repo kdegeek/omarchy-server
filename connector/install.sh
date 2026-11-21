@@ -109,16 +109,17 @@ got=$(python3 -c 'import ssl,sys,hashlib; print(hashlib.sha256(ssl.PEM_cert_to_D
 install -m 600 "$tmp" "$CONF/server-ca.crt"
 
 # 3. The connector itself.
+check_py() { python3 -B -c 'import ast, sys; ast.parse(open(sys.argv[1], "rb").read(), filename=sys.argv[1])' "$1"; }
 say "Downloading the connector"
 curl -fsSL --max-time 60 "${SOURCE%/}/main/connector/agent.py" -o "$DIR/agent.py.new" || die "Couldn't download the connector."
-python3 -m py_compile "$DIR/agent.py.new" || die "The downloaded connector didn't check out."
+check_py "$DIR/agent.py.new" || die "The downloaded connector didn't check out."
 mv "$DIR/agent.py.new" "$DIR/agent.py"
 chmod 700 "$DIR/agent.py"
 
 if has storage; then
 	say "Installing the storage helper"
 	curl -fsSL --max-time 60 "${SOURCE%/}/main/connector/helper.py" -o "$tmp.helper.py" || die "Couldn't download the storage helper."
-	python3 -m py_compile "$tmp.helper.py" || die "The downloaded storage helper didn't check out."
+	check_py "$tmp.helper.py" || die "The downloaded storage helper didn't check out."
 	sudo install -D -m 755 "$tmp.helper.py" /usr/local/libexec/omarchy-connector/helper.py
 	rm -f "$tmp.helper.py"
 	printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/omarchy-connector/helper.py\n' "$USER" | sudo tee /etc/sudoers.d/omarchy-connector >/dev/null
