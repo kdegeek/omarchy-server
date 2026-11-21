@@ -1,6 +1,6 @@
 // Reliability fixes for omarchyd machines and machine settings UI.
 import assert from 'node:assert/strict'
-import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
+import {mkdir, mkdtemp, readFile, rm, stat, statfs, writeFile} from 'node:fs/promises'
 import os from 'node:os'
 import {join} from 'node:path'
 import {test} from 'node:test'
@@ -661,6 +661,97 @@ test('#314: ejecting CD/DVD media from a running machine reports QEMU errors and
 	assert.equal(afterOk.hardware.disks.find((d) => d.id === 'cd0').media, null)
 	assert.equal(lastXml.includes('boot.iso'), false)
 })
+
+test('#605: live backup requires space for two copies and cleans up each live copy after conversion', async (t) => {
+	const id = 'a1b2c3d4'
+	const doms = new Map([[`omarchy-${id}`, 'running']])
+	let disk0GoneDuringDisk1Convert = false
+	let usedBytes = 0
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd === 'virsh') {
+				const a = args[0] === '-c' ? args.slice(2) : args
+				if (a[0] === 'list') {
+					return ` Id   Name   State\n------------------\n${[...doms].map(([n, s]) => ` -    ${n}   ${s}`).join('\n')}\n`
+				}
+				if (a[0] === 'backup-begin') {
+					const bx = await readFile(a[3], 'utf8')
+					for (const [, f] of bx.matchAll(/<target file='([^']+)'/g)) await writeFile(f, 'live-copy')
+					return ''
+				}
+				if (a[0] === 'domjobinfo') return a.includes('--completed') ? 'Job type: Completed\n' : 'Job type: None\n'
+				if (a[0] === 'destroy') {
+					doms.set(a[1], 'shut off')
+					return ''
+				}
+				return ''
+			}
+			if (cmd === 'qemu-img' && args[0] === 'info') {
+				return JSON.stringify({'virtual-size': usedBytes, 'actual-size': usedBytes})
+			}
+			if (cmd === 'qemu-img' && args[0] === 'convert') {
+				const src = args.at(-2)
+				const dst = args.at(-1)
+				if (src.endsWith('disk1.qcow2') && src.includes('.live')) {
+					disk0GoneDuringDisk1Convert = !(await stat(src.replace('disk1.qcow2', 'disk0.qcow2')).then(() => true, () => false))
+				}
+				await writeFile(dst, 'compressed')
+				return ''
+			}
+			return ''
+		},
+	})
+	const homeDir = join(env.root, 'home')
+	await mkdir(homeDir, {recursive: true})
+	const files = {resolve: async (p) => ({real: p === '/Home' ? homeDir : join(homeDir, p.replace(/^\/Home\/?/, ''))})}
+
+	const fs = await statfs(homeDir)
+	const freeGb = (fs.bavail * fs.bsize) / 1024 ** 3
+	const needGb = Math.max(1, Math.round(freeGb * 0.65 * 10) / 10)
+	usedBytes = Math.round(needGb * 1024 ** 3)
+
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	await writeFile(join(vmDir, 'disk1.qcow2'), 'd1')
+	const rec = makeMachineRecord(env.dataDir, {id})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec]}))
+
+	const m = env.open({files})
+	await m.ready
+
+	// Running machine has ~65% of freeGb used: 1x fits, 2x does not.
+	await assert.rejects(
+		() => m.procedures['machines.backup'].run({id}),
+		(err) => err instanceof RpcError && err.code === 'PRECONDITION_FAILED' && err.message.includes(`about ${Math.ceil(needGb * 2)} GB`),
+	)
+
+	// Stopped machine with the same disk size only needs 1x and succeeds.
+	await m.procedures['machines.forceStop'].run({id})
+	const {backupId: stoppedBackup} = await m.procedures['machines.backup'].run({id})
+	const end = Date.now() + 5000
+	while (!(await m.procedures['machines.backups'].run({id})).some((b) => b.id === stoppedBackup)) {
+		if (Date.now() > end) throw new Error('stopped backup did not finish')
+		await new Promise((r) => setTimeout(r, 20))
+	}
+
+	// Verify per-disk live cleanup for a small 2-disk running backup.
+	usedBytes = Math.round(0.1 * 1024 ** 3)
+	rec.layout.disks.push({id: 'disk1', file: join(vmDir, 'disk1.qcow2'), device: 'disk', bus: 'virtio', format: 'qcow2', sizeGb: 10})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec]}))
+	const m2 = env.open({files})
+	await m2.ready
+	await m2.procedures['machines.start'].run({id})
+	doms.set(`omarchy-${id}`, 'running')
+	const {backupId: liveBackup} = await m2.procedures['machines.backup'].run({id})
+	const end2 = Date.now() + 5000
+	while (!(await m2.procedures['machines.backups'].run({id})).some((b) => b.id === liveBackup)) {
+		if (Date.now() > end2) throw new Error('live backup did not finish')
+		await new Promise((r) => setTimeout(r, 20))
+	}
+	assert.equal(disk0GoneDuringDisk1Convert, true)
+})
+
 
 
 

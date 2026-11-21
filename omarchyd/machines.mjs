@@ -1464,9 +1464,10 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		const target = join(dir, id)
 		const disks = qcowDisks(m)
 		const need = (await Promise.all(disks.map((d) => diskInfo(d.file)))).reduce((a, i) => a + (i.usedGb ?? 1), 0)
-		const fs = await statfs(dir)
-		if ((fs.bavail * fs.bsize) / 1024 ** 3 < need + 1) throw new RpcError('PRECONDITION_FAILED', `Not enough free space for the backup (about ${Math.ceil(need)} GB)`)
 		const running = (await liveState(m)) === 'running'
+		const required = running ? need * 2 : need
+		const fs = await statfs(dir)
+		if ((fs.bavail * fs.bsize) / 1024 ** 3 < required + 1) throw new RpcError('PRECONDITION_FAILED', `Not enough free space for the backup (about ${Math.ceil(required)} GB)`)
 		busy.set(m.id, {state: running ? 'running' : 'stopped', progress: 0})
 		// A folder of its own (never one that's already there, so a failure only removes its own).
 		await mkdir(target, {mode: 0o700})
@@ -1495,7 +1496,11 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 					}
 					const done = await virsh('domjobinfo', domain(m.id), '--completed').catch(() => '')
 					if (/Job type:\s+Failed/.test(done)) throw new Error('QEMU couldn’t finish the backup')
-					for (const d of disks) await run('qemu-img', ['convert', '-c', '-O', 'qcow2', join(tmp, `${d.id}.qcow2`), join(target, `${d.id}.qcow2`)], {timeout: 6 * 60 * 60_000})
+					for (const d of disks) {
+						const liveFile = join(tmp, `${d.id}.qcow2`)
+						await run('qemu-img', ['convert', '-c', '-O', 'qcow2', liveFile, join(target, `${d.id}.qcow2`)], {timeout: 6 * 60 * 60_000})
+						await rm(liveFile, {force: true})
+					}
 					await rm(tmp, {recursive: true, force: true})
 				} else {
 					let i = 0
