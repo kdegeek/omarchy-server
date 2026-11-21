@@ -1456,7 +1456,7 @@ FOLDER = re.compile(r"^[^\x00-\x1f/][^\x00-\x1f]{0,199}$")
 
 def home_folder(rel):
     """A folder in the home folder, by its relative name; refuses anything that leads outside it."""
-    rel = str(rel).strip().rstrip("/")
+    rel = ("" if rel is None else str(rel)).rstrip("/")
     if not FOLDER.match(rel) or any(p in ("..", ".") for p in rel.split("/")):
         raise RuntimeError(f"“{rel[:60]}” isn’t a folder in your home folder")
     home = os.path.realpath(os.path.expanduser("~"))

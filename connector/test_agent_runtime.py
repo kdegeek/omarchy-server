@@ -224,5 +224,24 @@ class NonUtf8Read(unittest.TestCase):
                 got = [x["mount"] for x in agent.disks()]
             self.assertEqual(got, ["/", "/mnt/caf\ufffd"])
 
+
+class HomeFolderSpaces(unittest.TestCase):
+    # #548: home folders with leading or trailing spaces must resolve to themselves.
+    def test_leading_and_trailing_spaces_preserved(self):
+        with tempfile.TemporaryDirectory() as home:
+            names = [" lead", "Photos ", "Photos", "Docs"]
+            for n in names:
+                os.mkdir(os.path.join(home, n))
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                listed = [f["name"] for f in agent.backup_folders({})["folders"]]
+                self.assertEqual(set(listed), set(names))
+                for n in listed:
+                    resolved = agent.home_folder(n)
+                    self.assertEqual(resolved, os.path.realpath(os.path.join(home, n)))
+                    self.assertTrue(os.path.isdir(resolved))
+                for bad in ("", None, "/", "/etc", "..", "a/../b", "a\nb"):
+                    with self.assertRaises(RuntimeError):
+                        agent.home_folder(bad)
+
 if __name__ == "__main__":
     unittest.main()
