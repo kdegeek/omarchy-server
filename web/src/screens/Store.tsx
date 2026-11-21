@@ -90,32 +90,6 @@ export function Store({onOpenInstalled, onBack, onTerminal}: {onOpenInstalled: (
 		setSelected({app, install})
 	}
 
-	const Item = ({app}: {app: StoreApp}) => {
-		const inst = installed.get(app.id)
-		return (
-			<div className="store-item">
-				<button className="store-main" onClick={() => pick(app)}>
-					<AppIcon src={app.icon} name={app.name} size={58} />
-					<span className="t">
-						<b>{app.name}</b>
-						<span>{app.tagline}</span>
-					</span>
-				</button>
-				<span className="end">
-					{inst ? (
-						<button className="btn get" onClick={() => onOpenInstalled(inst)} aria-label={`Manage ${app.name}`}>
-							{isAppBusy(inst.state) ? <span className="spinner" style={{width: 14, height: 14}} /> : 'Open'}
-						</button>
-					) : (
-						<button className="btn get" onClick={() => pick(app, true)} aria-label={`Get ${app.name}`} disabled={app.compatible === false || !!app.unsupported}>
-							Get
-						</button>
-					)}
-				</span>
-			</div>
-		)
-	}
-
 	return (
 		<div className="stagger">
 			<div className="page-head">
@@ -193,7 +167,7 @@ export function Store({onOpenInstalled, onBack, onTerminal}: {onOpenInstalled: (
 								</div>
 								<div className="shelf">
 									{items.map((app) => (
-										<Item key={app.id} app={app} />
+										<StoreItem key={app.id} app={app} installed={installed.get(app.id)} onPick={pick} onOpenInstalled={onOpenInstalled} />
 									))}
 								</div>
 							</section>
@@ -202,7 +176,7 @@ export function Store({onOpenInstalled, onBack, onTerminal}: {onOpenInstalled: (
 				: !registry.isLoading && (
 						<div className="list-store" style={{marginTop: 4}}>
 							{shown.map((app) => (
-								<Item key={app.id} app={app} />
+								<StoreItem key={app.id} app={app} installed={installed.get(app.id)} onPick={pick} onOpenInstalled={onOpenInstalled} />
 							))}
 							{shown.length === 0 && (
 								<div className="glass empty">
@@ -379,6 +353,41 @@ function CommunityStores({owner, onClose}: {owner: boolean; onClose: () => void}
 				)}
 			</div>
 		</Sheet>
+	)
+}
+
+function StoreItem({
+	app,
+	installed,
+	onPick,
+	onOpenInstalled,
+}: {
+	app: StoreApp
+	installed?: UserApp
+	onPick: (app: StoreApp, install?: boolean) => void
+	onOpenInstalled: (app: UserApp) => void
+}) {
+	return (
+		<div className="store-item">
+			<button className="store-main" onClick={() => onPick(app)}>
+				<AppIcon src={app.icon} name={app.name} size={58} />
+				<span className="t">
+					<b>{app.name}</b>
+					<span>{app.tagline}</span>
+				</span>
+			</button>
+			<span className="end">
+				{installed ? (
+					<button className="btn get" onClick={() => onOpenInstalled(installed)} aria-label={`Manage ${app.name}`}>
+						{isAppBusy(installed.state) ? <span className="spinner" style={{width: 14, height: 14}} /> : 'Open'}
+					</button>
+				) : (
+					<button className="btn get" onClick={() => onPick(app, true)} aria-label={`Get ${app.name}`} disabled={app.compatible === false || !!app.unsupported}>
+						Get
+					</button>
+				)}
+			</span>
+		</div>
 	)
 }
 
