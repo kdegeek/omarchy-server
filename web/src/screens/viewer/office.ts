@@ -515,8 +515,8 @@ export async function readPptx(buf: ArrayBuffer): Promise<Deck> {
               runs.push({
                 text: first(r, "t")?.textContent ?? "",
                 size: sz ? Number(sz) / 100 : undefined,
-                bold: rPr?.getAttribute("b") === "1",
-                italic: rPr?.getAttribute("i") === "1",
+                bold: xmlBool(rPr?.getAttribute("b")),
+                italic: xmlBool(rPr?.getAttribute("i")),
                 color: rPr ? color(kids(rPr, "solidFill")[0]) : undefined,
               });
             }

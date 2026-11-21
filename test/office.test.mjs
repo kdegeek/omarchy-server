@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {after, before, test} from 'node:test'
 import JSZip from 'jszip'
 
-import {cleanNum, decodeCp437, listZip, readXlsx} from '../web/src/screens/viewer/office.ts'
+import {cleanNum, decodeCp437, listZip, readPptx, readXlsx} from '../web/src/screens/viewer/office.ts'
 
 const unescapeXml = (s) =>
 	s.replace(/&(#x[0-9a-fA-F]+|#\d+|lt|gt|amp|quot|apos);/g, (_, e) => {
@@ -481,4 +481,49 @@ test('readXlsx ignores phonetic furigana <rPh> runs in shared strings and inline
 	})
 	const sheets = await readXlsx(buf)
 	assert.deepEqual(sheets[0].rows, [['東京', '東京', '大阪']])
+})
+
+test('readPptx recognises b="true" and i="true" as bold and italic', async () => {
+	const zip = new JSZip()
+	zip.file(
+		'ppt/presentation.xml',
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+			'<p:sldSz cx="12192000" cy="6858000"/>' +
+			'<p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>' +
+			'</p:presentation>',
+	)
+	zip.file(
+		'ppt/_rels/presentation.xml.rels',
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+			'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>' +
+			'</Relationships>',
+	)
+	zip.file(
+		'ppt/slides/slide1.xml',
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+			'<p:cSld><p:spTree><p:sp>' +
+			'<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="476250"/></a:xfrm></p:spPr>' +
+			'<p:txBody><a:bodyPr/><a:p>' +
+			'<a:r><a:rPr b="1" i="1"/><a:t>one</a:t></a:r>' +
+			'<a:r><a:rPr b="true" i="true"/><a:t>two</a:t></a:r>' +
+			'<a:r><a:rPr b="0" i="false"/><a:t>three</a:t></a:r>' +
+			'<a:r><a:t>four</a:t></a:r>' +
+			'</a:p></p:txBody>' +
+			'</p:sp></p:spTree></p:cSld></p:sld>',
+	)
+	const deck = await readPptx(await zip.generateAsync({type: 'arraybuffer'}))
+	const shape = deck.slides[0].shapes[0]
+	assert.equal(shape.kind, 'text')
+	assert.deepEqual(
+		shape.paras[0].runs.map((r) => ({text: r.text, bold: r.bold, italic: r.italic})),
+		[
+			{text: 'one', bold: true, italic: true},
+			{text: 'two', bold: true, italic: true},
+			{text: 'three', bold: false, italic: false},
+			{text: 'four', bold: false, italic: false},
+		],
+	)
 })
