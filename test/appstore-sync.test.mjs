@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import {execFileSync} from 'node:child_process'
 import {createHash} from 'node:crypto'
-import {mkdir, mkdtemp, readdir, realpath, rm, writeFile} from 'node:fs/promises'
+import {mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile} from 'node:fs/promises'
 import os from 'node:os'
 import {join} from 'node:path'
 import {test} from 'node:test'
@@ -115,4 +115,97 @@ test('removing a store while its own sync is running leaves no leftover store fo
 	assert.deepEqual(reg, [])
 	const entries = await readdir(join(data, 'apps', 'stores'))
 	assert.equal(entries.includes(hashA), false)
+})
+
+test('overlapping registry reads wait for the in-flight clone instead of cloning or resetting mid-sync', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'appstore-overlap-clone-')))
+	t.after(() => rm(root, {recursive: true, force: true}))
+
+	const store = await makeStore(root, 'store-a', [
+		{id: 'one', port: 31001},
+		{id: 'two', port: 31002},
+		{id: 'three', port: 31003},
+	])
+	const gitCalls = []
+	const run = async (cmd, args, opts = {}) => {
+		if (cmd === 'git') {
+			gitCalls.push(args)
+			if (args[0] === 'clone') await new Promise((r) => setTimeout(r, 80))
+			return execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString()
+		}
+		return ''
+	}
+
+	const apps = createApps({dataDir: join(root, 'data'), home: join(root, 'home'), allowFileStores: true, defaultStores: [{url: store.url}], systemApps: null, run})
+	t.after(() => apps.close())
+
+	const p1 = apps.procedures['appStore.registry'].run()
+	await new Promise((r) => setTimeout(r, 20))
+	const p2 = apps.procedures['appStore.registry'].run()
+	const [a, b] = await Promise.all([p1, p2])
+
+	assert.equal(gitCalls.length, 1)
+	assert.equal(gitCalls[0][0], 'clone')
+	assert.deepEqual(a[0].apps.map((x) => x.id).sort(), ['one', 'three', 'two'])
+	assert.deepEqual(b[0].apps.map((x) => x.id).sort(), ['one', 'three', 'two'])
+})
+
+test('overlapping refresh and registry reads share one fetch on an existing clone', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'appstore-overlap-fetch-')))
+	t.after(() => rm(root, {recursive: true, force: true}))
+
+	const store = await makeStore(root, 'store-a', [{id: 'one', port: 31001}])
+	const data = join(root, 'data')
+	const syncRun = async (cmd, args, opts = {}) => (cmd === 'git' ? execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString() : '')
+
+	const first = createApps({dataDir: data, home: join(root, 'home'), allowFileStores: true, defaultStores: [{url: store.url}], systemApps: null, run: syncRun})
+	await first.procedures['appStore.registry'].run()
+	first.close()
+
+	await mkdir(join(store.work, 'two'), {recursive: true})
+	await writeFile(join(store.work, 'two', 'omarchy-app.yml'), 'manifestVersion: 1\nid: two\nname: two\nversion: "1.0"\nport: 31002\n')
+	await writeFile(join(store.work, 'two', 'docker-compose.yml'), 'services:\n  web:\n    image: nginx\n')
+	git(store.work, 'add', '-A')
+	git(store.work, 'commit', '-qm', 'two')
+	git(store.work, 'push', '-q', 'origin', 'HEAD:main')
+
+	const stateFile = join(data, 'apps', 'apps.json')
+	const st = JSON.parse(await readFile(stateFile, 'utf8'))
+	for (const s of st.stores) s.syncedAt = 0
+	await writeFile(stateFile, JSON.stringify(st))
+
+	let pauseFetch = true
+	let onFetchStarted
+	const fetchStarted = new Promise((r) => (onFetchStarted = r))
+	let releaseFetch
+	const gateFetch = new Promise((r) => (releaseFetch = r))
+	const fetchCalls = []
+
+	const run = async (cmd, args, opts = {}) => {
+		if (cmd === 'git') {
+			if (args[2] === 'fetch') {
+				fetchCalls.push(args)
+				if (pauseFetch) {
+					pauseFetch = false
+					onFetchStarted()
+					await gateFetch
+				}
+			}
+			return execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString()
+		}
+		return ''
+	}
+
+	const second = createApps({dataDir: data, home: join(root, 'home'), allowFileStores: true, defaultStores: [{url: store.url}], systemApps: null, run})
+	t.after(() => second.close())
+
+	const p1 = second.procedures['appStore.refresh'].run()
+	await fetchStarted
+	const p2 = second.procedures['appStore.registry'].run()
+	releaseFetch()
+	const [count, reg] = await Promise.all([p1, p2])
+
+	assert.equal(fetchCalls.length, 1)
+	assert.equal(count, 2)
+	assert.deepEqual(reg[0].apps.map((x) => x.id).sort(), ['one', 'two'])
 })

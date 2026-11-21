@@ -567,6 +567,8 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 	let registryCache = null
 	let registryWarm = null
 	let storesGen = 0
+	const syncing = new Map()
+	let registryInFlight = null
 
 	// Apps come back after a reboot only if Podman's own restart unit is on (it's off by default, and
 	// rootless Podman has no daemon to do it). It's a user unit, so this needs no sudo: servers set up
@@ -1023,20 +1025,25 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		}
 		return {url, meta: {id: String(meta.id), name: String(meta.name ?? meta.id)}, apps}
 	}
-	async function syncStore(url) {
-		const dir = storeDir(url)
-		if (await exists(join(dir, '.git'))) {
-			// A shallow clone can't `pull --ff-only` once the store has moved on (the new tip doesn't
-			// connect to the one commit it has), so take the store's latest commit as it is.
-			await run('git', ['-C', dir, 'fetch', '--depth', '1', 'origin', 'HEAD'], {timeout: 120_000})
-			await run('git', ['-C', dir, 'reset', '--hard', 'FETCH_HEAD'], {timeout: 60_000})
-			await run('git', ['-C', dir, 'clean', '-fdx'], {timeout: 60_000})
-		} else await run('git', ['clone', '--depth', '1', '--', url, dir], {timeout: 120_000})
+	function syncStore(url) {
+		const key = url.toLowerCase()
+		if (syncing.has(key)) return syncing.get(key)
+		const p = (async () => {
+			const dir = storeDir(url)
+			if (await exists(join(dir, '.git'))) {
+				// A shallow clone can't `pull --ff-only` once the store has moved on (the new tip doesn't
+				// connect to the one commit it has), so take the store's latest commit as it is.
+				await run('git', ['-C', dir, 'fetch', '--depth', '1', 'origin', 'HEAD'], {timeout: 120_000})
+				await run('git', ['-C', dir, 'reset', '--hard', 'FETCH_HEAD'], {timeout: 60_000})
+				await run('git', ['-C', dir, 'clean', '-fdx'], {timeout: 60_000})
+			} else await run('git', ['clone', '--depth', '1', '--', url, dir], {timeout: 120_000})
+		})().finally(() => {
+			if (syncing.get(key) === p) syncing.delete(key)
+		})
+		syncing.set(key, p)
+		return p
 	}
-	async function registry({refresh = false} = {}) {
-		await ready
-		if (registryCache && !refresh && Date.now() - registryCache.at < 60 * 60_000) return registryCache.list
-		const gen = storesGen
+	async function loadRegistry({refresh, gen}) {
 		const snapshot = [...state.stores]
 		const stillAdded = (url) => state.stores.some((x) => x.url.toLowerCase() === url.toLowerCase())
 		const list = []
@@ -1095,6 +1102,19 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 		if (dirty) await save()
 		if (storesGen === gen) registryCache = {at: Date.now(), list: current}
 		return current
+	}
+	async function registry({refresh = false} = {}) {
+		await ready
+		if (registryCache && !refresh && Date.now() - registryCache.at < 60 * 60_000) return registryCache.list
+		if (registryInFlight && registryInFlight.gen === storesGen && (!refresh || registryInFlight.refresh)) {
+			return registryInFlight.promise
+		}
+		const gen = storesGen
+		const promise = loadRegistry({refresh, gen}).finally(() => {
+			if (registryInFlight?.promise === promise) registryInFlight = null
+		})
+		registryInFlight = {gen, refresh, promise}
+		return promise
 	}
 	// An app's listing. An installed app stays with the store it came from (two stores can list the
 	// same id with different folders and settings, and an update must never switch between them).
