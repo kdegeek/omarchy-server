@@ -185,3 +185,20 @@ describe('files screen: #189 Enter key on row action buttons', () => {
 		assert.match(src, /onKeyDown=\{\(e\) => shouldActivateRowOnKey\(e\) && activate\(f\)\}/)
 	})
 })
+
+describe('files screen: #195 ShareSheet access radios stay mounted and grouped', () => {
+	test('ShareAccessChoice lives at module scope with a shared radio name from useId()', async () => {
+		const src = await filesSource()
+		const shareStart = src.indexOf('export function ShareSheet(')
+		assert.ok(shareStart > 0)
+		const beforeShare = src.slice(0, shareStart)
+		const insideShare = src.slice(shareStart)
+
+		assert.match(beforeShare, /function ShareAccessChoice\(/)
+		assert.match(beforeShare, /<input type="radio" name=\{name\}/)
+		assert.doesNotMatch(insideShare, /const Choice\s*=/)
+		assert.match(insideShare, /const accessRadioName = useId\(\)/)
+		const matches = insideShare.match(/<ShareAccessChoice[\s\S]*?name=\{accessRadioName\}/g) ?? []
+		assert.equal(matches.length, 2)
+	})
+})

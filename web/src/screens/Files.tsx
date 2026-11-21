@@ -4,6 +4,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -1889,6 +1890,33 @@ function UploadPanel({
 // Share a folder on your home LAN (Samba), or see and change how it's shared. Other computers open
 // it at smb://<server>/<name>; with a password, they sign in with your server account's user name
 // and your share password.
+/** Module-level radio choice so re-renders keep focus on the active access option. */
+function ShareAccessChoice({
+  name,
+  on,
+  title,
+  note,
+  onPick,
+  disabled,
+}: {
+  name: string;
+  on: boolean;
+  title: string;
+  note: string;
+  onPick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 2px", fontSize: 14.5, opacity: disabled ? 0.55 : 1 }}>
+      <input type="radio" name={name} checked={on} disabled={disabled} onChange={onPick} />
+      <span>
+        {title}
+        <small className="muted" style={{ display: "block" }}>{note}</small>
+      </span>
+    </label>
+  );
+}
+
 export function ShareSheet({
   path,
   name,
@@ -1905,6 +1933,7 @@ export function ShareSheet({
   const toast = useToast();
   const qc = useQueryClient();
   const confirm = useConfirm();
+  const accessRadioName = useId();
   const shares = useQuery({ queryKey: ["files.shares"], queryFn: () => query<SmbShare[]>("files.shares") });
   const options = useQuery({
     queryKey: ["files.shareOptions"],
@@ -1942,20 +1971,12 @@ export function ShareSheet({
       () => toast(v),
     );
   const noPasswordOk = options.data?.noPassword === true;
-  const Choice = ({ on, title, note, onPick, disabled }: { on: boolean; title: string; note: string; onPick: () => void; disabled?: boolean }) => (
-    <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 2px", fontSize: 14.5, opacity: disabled ? 0.55 : 1 }}>
-      <input type="radio" checked={on} disabled={disabled} onChange={onPick} />
-      <span>
-        {title}
-        <small className="muted" style={{ display: "block" }}>{note}</small>
-      </span>
-    </label>
-  );
   const passwordChoices = (current: boolean, pick: (v: boolean) => void) => (
     <div className="glass card" style={{ borderRadius: 18, marginBottom: 12 }}>
       <b style={{ fontSize: 14 }}>Who can open it</b>
-      <Choice on={current} title="Password needed" note={`Sign in as ${username ?? "your server user"} with your share password.`} onPick={() => pick(true)} />
-      <Choice
+      <ShareAccessChoice name={accessRadioName} on={current} title="Password needed" note={`Sign in as ${username ?? "your server user"} with your share password.`} onPick={() => pick(true)} />
+      <ShareAccessChoice
+        name={accessRadioName}
         on={!current}
         title="No password"
         note={noPasswordOk ? "Anyone on your home LAN can open it. Writes are not saved as you. Only for folders you don’t mind anyone at home seeing." : "Needs Omarchy Server’s installer to run once more on this server."}
