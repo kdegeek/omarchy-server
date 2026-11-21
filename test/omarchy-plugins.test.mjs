@@ -137,4 +137,35 @@ describe('installing a plugin', () => {
 		assert.equal((await p2.list({})).available, false)
 		await assert.rejects(p2.install({id: 'acme.x'}), /doesn’t support plugins|doesn’t have plugins/)
 	})
+
+	test('an invalid manifest.json in one plugin folder does not break list, install, or remove', async (t) => {
+		const scratchHome = await mkdtemp(join(os.tmpdir(), 'omarchy-plugins-bad-'))
+		t.after(() => rm(scratchHome, {recursive: true, force: true}))
+		const pluginsDir = join(scratchHome, '.config', 'omarchy', 'plugins')
+		await mkdir(join(pluginsDir, 'good'), {recursive: true})
+		await mkdir(join(pluginsDir, 'bad'), {recursive: true})
+		await writeFile(join(pluginsDir, 'good', 'manifest.json'), '{"id":"good"}')
+		await writeFile(join(pluginsDir, 'bad', 'manifest.json'), '{"id":"bad",}')
+
+		const ran = []
+		const p = createOmarchyPlugins({
+			home: scratchHome,
+			theme: {
+				findCommand: async (name) => `/usr/bin/${name}`,
+				runCommand: async (name, args) => ran.push([name, ...args]),
+			},
+			fetchImpl: async () => ({ok: true, json: async () => ({plugins: [entry({id: 'good'})]})}),
+			catalogUrls: ['https://x/catalog.json'],
+		})
+
+		const page = await p.list({})
+		assert.equal(page.plugins[0].installed, true)
+		await p.remove({id: 'good'})
+		await p.remove({id: 'bad'})
+		await wait(async () => ran.length >= 2)
+		assert.deepEqual(ran, [
+			['omarchy-plugin-remove', 'good', '--yes'],
+			['omarchy-plugin-remove', 'bad', '--yes'],
+		])
+	})
 })

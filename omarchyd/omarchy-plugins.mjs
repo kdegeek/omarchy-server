@@ -81,7 +81,9 @@ export function createOmarchyPlugins({home, theme, run = execRun, fetchImpl = fe
 		const out = new Set()
 		for (const e of await readdir(DIR, {withFileTypes: true}).catch(() => [])) {
 			if (e.name.startsWith('.') || !(e.isDirectory() || e.isSymbolicLink())) continue
-			const m = await readFile(join(DIR, e.name, 'manifest.json'), 'utf8').then(JSON.parse, () => null)
+			const m = await readFile(join(DIR, e.name, 'manifest.json'), 'utf8')
+				.then((t) => JSON.parse(t))
+				.catch(() => null)
 			if (m?.id) out.add(String(m.id))
 			out.add(e.name)
 		}
