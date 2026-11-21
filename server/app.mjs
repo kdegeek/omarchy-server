@@ -1930,8 +1930,12 @@ export function createApp({store, staticDir, fetchImpl = fetch, secureCookies = 
 	// ---- PWA -----------------------------------------------------------------
 	if (staticDir && existsSync(staticDir)) {
 		app.use('/assets', express.static(join(staticDir, 'assets'), {immutable: true, maxAge: '1y'}))
+		app.use('/assets', (_req, res) => res.status(404).end())
 		app.use(express.static(staticDir, {index: false, maxAge: 0}))
-		app.get('*', (req, res) => res.set('Cache-Control', 'no-cache').sendFile(join(staticDir, 'index.html')))
+		app.get('*', (req, res) => {
+			if (req.path.startsWith('/.well-known/') || /\/[^/]+\.[^/]+$/.test(req.path)) return res.status(404).end()
+			res.set('Cache-Control', 'no-cache').sendFile(join(staticDir, 'index.html'))
+		})
 	}
 	return app
 }
