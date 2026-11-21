@@ -413,3 +413,36 @@ describe('files screen: #493 create empty folders on folder drop or pick', () =>
 		assert.equal(helpers.pickDirectoryFromWindow({}), null)
 	})
 })
+
+describe('files screen: #494 human-readable Kind label in ItemSheet', () => {
+	test('fileKindLabel maps MIME types and extensions to plain-English labels', () => {
+		const cases = [
+			[{name: 'report.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}, 'Word document'],
+			[{name: 'budget.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}, 'Excel spreadsheet'],
+			[{name: 'slides.pptx', type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'}, 'PowerPoint presentation'],
+			[{name: 'omarchy.iso', type: 'application/x-iso9660-image'}, 'Disk image (ISO)'],
+			[{name: 'notes.md', type: 'text/markdown'}, 'Markdown document'],
+			[{name: 'deploy.sh', type: 'text/x-shellscript'}, 'Shell script'],
+			[{name: 'notes.txt', type: 'text/plain'}, 'Text file'],
+			[{name: 'photo.png', type: 'image/png'}, 'PNG image'],
+			[{name: 'clip.mp4', type: 'video/mp4'}, 'MP4 video'],
+			[{name: 'song.mp3', type: 'audio/mpeg'}, 'MP3 audio'],
+			[{name: 'inter.woff2', type: 'font/woff2'}, 'WOFF2 font'],
+			[{name: 'README', type: 'text/plain'}, 'Text file'],
+			[{name: 'data', type: 'application/octet-stream'}, 'Unknown file'],
+			[{name: 'firmware.bin', type: 'application/octet-stream'}, 'BIN file'],
+			[{name: 'Docs', type: 'directory'}, 'Folder'],
+		]
+		for (const [entry, expected] of cases) {
+			const label = helpers.fileKindLabel(entry)
+			assert.equal(label, expected, entry.name)
+			assert.doesNotMatch(label, /vnd\.|octet-stream|x-iso9660-image|x-shellscript|\bplain\b/)
+		}
+	})
+
+	test('Files.tsx renders fileKindLabel(f) in ItemSheet instead of raw MIME subtype', async () => {
+		const src = await filesSource()
+		assert.match(src, /<span className="v">\{fileKindLabel\(f\)\}<\/span>/)
+		assert.doesNotMatch(src, /f\.type\.split\("\/"\)\.pop\(\)/)
+	})
+})

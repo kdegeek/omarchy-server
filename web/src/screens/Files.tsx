@@ -28,7 +28,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
-import { batchToastMessage, canSubmitNamePrompt, collectUploadDirs, type DirectoryHandleLike, type FavoriteItem, favoritePath, filterUnsyncedPhotos, handleFileDragEnter, handleFileDragOver, handleFileDrop, nextSearchSelection, pickDirectoryFromWindow, readDirectoryHandle, readDroppedEntries, runFileBatch, sharePasswordAction, sharePasswordLabel, shouldActivateRowOnKey, UPLOAD_REFRESH_KEYS, type UploadBatch } from "../filesHelpers";
+import { batchToastMessage, canSubmitNamePrompt, collectUploadDirs, type DirectoryHandleLike, type FavoriteItem, favoritePath, fileKindLabel, filterUnsyncedPhotos, handleFileDragEnter, handleFileDragOver, handleFileDrop, nextSearchSelection, pickDirectoryFromWindow, readDirectoryHandle, readDroppedEntries, runFileBatch, sharePasswordAction, sharePasswordLabel, shouldActivateRowOnKey, UPLOAD_REFRESH_KEYS, type UploadBatch } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -1550,7 +1550,7 @@ function ItemSheet(p: {
         {!isDir(f) && (
           <div className="row static">
             <span className="k">Kind</span>
-            <span className="v">{f.type.split("/").pop()}</span>
+            <span className="v">{fileKindLabel(f)}</span>
           </div>
         )}
         {f.modified ? (

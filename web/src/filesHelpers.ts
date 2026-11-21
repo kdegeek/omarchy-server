@@ -253,4 +253,84 @@ export async function readDirectoryHandle(root: DirectoryHandleLike): Promise<Up
 	return {files, dirs}
 }
 
+const EXT_KIND_LABELS: Record<string, string> = {
+	doc: 'Word document',
+	docx: 'Word document',
+	xls: 'Excel spreadsheet',
+	xlsx: 'Excel spreadsheet',
+	ppt: 'PowerPoint presentation',
+	pptx: 'PowerPoint presentation',
+	pages: 'Pages document',
+	numbers: 'Numbers spreadsheet',
+	key: 'Keynote presentation',
+	pdf: 'PDF document',
+	md: 'Markdown document',
+	markdown: 'Markdown document',
+	txt: 'Text file',
+	log: 'Text file',
+	conf: 'Text file',
+	ini: 'Text file',
+	toml: 'Text file',
+	csv: 'CSV spreadsheet',
+	tsv: 'TSV spreadsheet',
+	json: 'JSON file',
+	xml: 'XML file',
+	html: 'HTML document',
+	htm: 'HTML document',
+	css: 'CSS stylesheet',
+	js: 'JavaScript file',
+	mjs: 'JavaScript file',
+	ts: 'TypeScript file',
+	sh: 'Shell script',
+	py: 'Python script',
+	yml: 'YAML file',
+	yaml: 'YAML file',
+	iso: 'Disk image (ISO)',
+	zip: 'ZIP archive',
+	tar: 'TAR archive',
+	gz: 'Gzip archive',
+	tgz: 'TAR archive',
+	'7z': '7Z archive',
+	rar: 'RAR archive',
+}
+
+const MIME_KIND_LABELS: Record<string, string> = {
+	'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word document',
+	'application/msword': 'Word document',
+	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Excel spreadsheet',
+	'application/vnd.ms-excel': 'Excel spreadsheet',
+	'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint presentation',
+	'application/vnd.ms-powerpoint': 'PowerPoint presentation',
+	'application/vnd.apple.pages': 'Pages document',
+	'application/vnd.apple.numbers': 'Numbers spreadsheet',
+	'application/vnd.apple.keynote': 'Keynote presentation',
+	'application/pdf': 'PDF document',
+	'application/x-iso9660-image': 'Disk image (ISO)',
+	'text/markdown': 'Markdown document',
+	'text/x-shellscript': 'Shell script',
+	'text/plain': 'Text file',
+}
+
+const CATEGORY_SUFFIX: Array<[string, string]> = [
+	['image/', 'image'],
+	['video/', 'video'],
+	['audio/', 'audio'],
+	['font/', 'font'],
+]
+
+/** Return a plain-English kind label for the ItemSheet Kind row instead of raw MIME subtypes. */
+export function fileKindLabel(f: Pick<FileEntry, 'name' | 'type'>): string {
+	if (f.type === 'directory') return 'Folder'
+	const dot = f.name.lastIndexOf('.')
+	const e = dot > 0 ? f.name.slice(dot + 1).toLowerCase() : ''
+	if (e && EXT_KIND_LABELS[e]) return EXT_KIND_LABELS[e]
+	if (MIME_KIND_LABELS[f.type]) return MIME_KIND_LABELS[f.type]
+	for (const [prefix, noun] of CATEGORY_SUFFIX) {
+		if (f.type.startsWith(prefix)) return e ? `${e.toUpperCase()} ${noun}` : `${noun[0].toUpperCase()}${noun.slice(1)}`
+	}
+	if (e) return `${e.toUpperCase()} file`
+	if (f.type.startsWith('text/')) return 'Text file'
+	return 'Unknown file'
+}
+
 export type {FileEntry}
