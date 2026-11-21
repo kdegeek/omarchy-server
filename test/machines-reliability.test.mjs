@@ -902,6 +902,86 @@ test('#660: interrupted backup folders are cleaned up on startup and deletable v
 	await new Promise((r) => setTimeout(r, 30))
 })
 
+test('#664: protection, onBoot, startup order, notes, and rename apply without marking restart pending', async (t) => {
+	const id = 'a1b2c3d4'
+	const doms = new Map([[`omarchy-${id}`, 'running']])
+	const virshCalls = []
+	let lastXml = ''
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd !== 'virsh') return ''
+			const a = args[0] === '-c' ? args.slice(2) : args
+			virshCalls.push(a.join(' '))
+			if (a[0] === 'list') {
+				return ` Id   Name   State\n------------------\n${[...doms].map(([n, s]) => ` -    ${n}   ${s}`).join('\n')}\n`
+			}
+			if (a[0] === 'define') {
+				lastXml = await readFile(a[1], 'utf8')
+				return ''
+			}
+			if (a[0] === 'shutdown' || a[0] === 'destroy') {
+				doms.set(a[1], 'shut off')
+				return ''
+			}
+			if (a[0] === 'start') {
+				doms.set(a[1], 'running')
+				return ''
+			}
+			return ''
+		},
+	})
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [makeMachineRecord(env.dataDir, {id})]}))
+
+	const m = env.open()
+	await m.ready
+
+	for (const patch of [{protection: true}, {onBoot: true}, {startupOrder: 2, startupDelay: 10}, {notes: 'hi'}, {name: 'Renamed'}]) {
+		await m.procedures['machines.updateOptions'].run({id, ...patch})
+		const listed = (await m.procedures['machines.list'].run()).find((x) => x.id === id)
+		const det = await m.procedures['machines.details'].run({id})
+		assert.equal(listed.pending, undefined)
+		assert.equal(det.pending, false)
+	}
+	assert.match(lastXml, /<title>Renamed<\/title>/)
+	assert.match(lastXml, /<description>hi<\/description>/)
+
+	virshCalls.length = 0
+	await m.procedures['machines.restart'].run({id})
+	assert.equal(virshCalls.includes(`reboot omarchy-${id}`), true)
+	assert.equal(virshCalls.includes(`shutdown omarchy-${id}`), false)
+
+	// Wait for restart settling to finish before checking list().
+	const end = Date.now() + 5000
+	while ((await m.procedures['machines.list'].run()).find((x) => x.id === id).state !== 'running') {
+		if (Date.now() > end) throw new Error('did not settle to running')
+		await new Promise((r) => setTimeout(r, 50))
+	}
+
+	// Hardware-level options do mark pending.
+	await m.procedures['machines.updateOptions'].run({id, agent: true})
+	assert.equal((await m.procedures['machines.list'].run()).find((x) => x.id === id).pending, true)
+	assert.equal((await m.procedures['machines.details'].run({id})).pending, true)
+
+	// Later non-hardware option edits must preserve an existing pending state.
+	await m.procedures['machines.updateOptions'].run({id, protection: false})
+	assert.equal((await m.procedures['machines.details'].run({id})).pending, true)
+
+	await m.procedures['machines.restart'].run({id})
+	const end2 = Date.now() + 5000
+	while ((await m.procedures['machines.list'].run()).find((x) => x.id === id).state !== 'running') {
+		if (Date.now() > end2) throw new Error('did not settle to running after second restart')
+		await new Promise((r) => setTimeout(r, 50))
+	}
+	assert.equal((await m.procedures['machines.details'].run({id})).pending, false)
+
+	await m.procedures['machines.updateOptions'].run({id, tablet: false})
+	assert.equal((await m.procedures['machines.details'].run({id})).pending, true)
+})
+
+
 
 
 

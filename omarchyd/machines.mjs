@@ -845,11 +845,11 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		if ((await liveState(m)) !== 'stopped') throw new RpcError('PRECONDITION_FAILED', `Shut down ${m.name} first to ${what}`)
 	}
 	// A changed definition: libvirt keeps it for the next start. While running, it's pending until then.
-	async function markChanged(m) {
+	async function markChanged(m, {markPending = true} = {}) {
 		if (m.state !== 'error') {
 			if (isBusy(m.id)) throw new RpcError('CONFLICT', `${m.name} is busy`)
 			await define(m)
-			if ((await liveState(m)) !== 'stopped') m.pending = true
+			if (markPending && (await liveState(m)) !== 'stopped') m.pending = true
 		}
 		await save()
 	}
@@ -1127,6 +1127,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		})
 	}
 
+	const HARDWARE_OPTION_DEFAULTS = {tablet: true, acpi: true, kvm: true, agent: false, bootMenu: false}
 	async function updateOptions(input = {}) {
 		await ready
 		const m = find(input.id)
@@ -1159,11 +1160,17 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		return task(m, 'options', null, async () => {
 			const prevName = m.name
 			const prevOptions = m.options
+			const hardwareChanged = Object.entries(HARDWARE_OPTION_DEFAULTS).some(([k, def]) => {
+				const before = prevOptions?.[k] === undefined ? def : !!prevOptions[k]
+				const after = o[k] === undefined ? def : !!o[k]
+				return before !== after
+			})
+			const xmlChanged = hardwareChanged || nextName !== prevName || (o.notes ?? '') !== (prevOptions?.notes ?? '')
 			m.name = nextName
 			m.options = o
 			try {
-				if (m.state === 'error') await save()
-				else await markChanged(m)
+				if (m.state === 'error' || !xmlChanged) await save()
+				else await markChanged(m, {markPending: hardwareChanged})
 			} catch (error) {
 				m.name = prevName
 				m.options = prevOptions
