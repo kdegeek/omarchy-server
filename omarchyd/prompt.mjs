@@ -10,6 +10,16 @@ export function takeLine(value, chunk) {
 			const next = ch === '\r' && chunk[i + 1] === '\n' ? i + 2 : i + 1
 			return {done: true, value, rest: chunk.slice(next)}
 		}
+		if (ch === '\u001b') {
+			if (chunk[i + 1] === '[') {
+				i += 2
+				while (i < chunk.length && chunk[i] >= ' ' && chunk[i] <= '?') i++
+				if (i < chunk.length && (chunk[i] < '@' || chunk[i] > '~')) i--
+			} else if (chunk[i + 1] === 'O' && i + 2 < chunk.length && chunk[i + 2] >= '@' && chunk[i + 2] <= '~') {
+				i += 2
+			}
+			continue
+		}
 		if (ch === '\u007f' || ch === '\b') value = [...value].slice(0, -1).join('')
 		else if (ch >= ' ' || ch > '\u007f') value += ch
 	}
