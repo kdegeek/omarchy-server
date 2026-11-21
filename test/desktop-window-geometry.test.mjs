@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import {describe, test} from 'node:test'
 
-import {TITLE_BAR_HEIGHT, clampWindowRect} from '../web/src/desktop/windowGeometry.ts'
+import {TITLE_BAR_HEIGHT, clampDragY, clampWindowRect} from '../web/src/desktop/windowGeometry.ts'
 import {BIG} from '../web/src/layout.ts'
 
 describe('desktop window geometry', () => {
@@ -43,5 +43,16 @@ describe('desktop window geometry', () => {
 
 		const fitting = {x: 120, y: 80, w: 700, h: 500}
 		assert.deepEqual(clampWindowRect(fitting, bottomDockArea), fitting)
+	})
+
+	test('clampDragY keeps dragged title bar above bottom dock and below top bar/top dock', () => {
+		const bottomDockArea = {x: 0, y: 34, w: 1440, h: 794} // 900px tall viewport - 34px top bar - 72px bottom dock
+		const y = clampDragY(850, bottomDockArea)
+		assert.equal(y, 786)
+		assert.ok(y + TITLE_BAR_HEIGHT <= bottomDockArea.y + bottomDockArea.h)
+
+		assert.equal(clampDragY(0, bottomDockArea), 34)
+		assert.equal(clampDragY(20, {x: 0, y: 106, w: 1440, h: 794}), 106)
+		assert.equal(clampDragY(90, {x: 0, y: 34, w: 400, h: 30}), 34)
 	})
 })

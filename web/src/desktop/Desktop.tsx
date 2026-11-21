@@ -28,7 +28,7 @@ import {Onboarding} from './hyprland/Onboarding'
 import {desktopIconKeyAction, shouldClearDesktopSelection} from './desktopIcons'
 import {addStartingMachine, reconcileStartingMachines, type StartingMachine} from './machineStart'
 import {loadWallpaper} from './wallpaperLoader'
-import {clampWindowRect} from './windowGeometry'
+import {clampDragY, clampWindowRect} from './windowGeometry'
 import {startMinuteClock} from './clock'
 
 const HINT_KEY = 'omarchy-server:desk-hint-closed'
@@ -2019,7 +2019,7 @@ function WindowFrame({
 			}
 			const a = area()
 			const x = rect.x + dx
-			const y = Math.min(Math.max(a.y, rect.y + dy), window.innerHeight - 48)
+			const y = clampDragY(rect.y + dy, a)
 			node.style.left = `${x}px`
 			node.style.top = `${y}px`
 			snap = ev.clientY <= TOP + 2 ? 'max' : ev.clientX <= a.x + 4 ? 'left' : ev.clientX >= a.x + a.w - 5 ? 'right' : null
@@ -2033,7 +2033,7 @@ function WindowFrame({
 			if (!moved) return
 			const a = area()
 			const x = rect.x + (ev.clientX - start.px)
-			const y = Math.min(Math.max(a.y, rect.y + (ev.clientY - start.py)), window.innerHeight - 48)
+			const y = clampDragY(rect.y + (ev.clientY - start.py), a)
 			onUpdate(win.id, snap ? {snap, x, y, w: rect.w, h: rect.h} : {snap: null, x, y, w: rect.w, h: rect.h})
 		}
 		window.addEventListener('pointermove', move)

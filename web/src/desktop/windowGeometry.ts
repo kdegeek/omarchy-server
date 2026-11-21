@@ -18,3 +18,8 @@ export function clampWindowRect(
 	const y = Math.min(maxY, Math.max(workArea.y, rect.y))
 	return x === rect.x && y === rect.y && w === rect.w && h === rect.h ? rect : {x, y, w, h}
 }
+
+export function clampDragY(y: number, workArea: WindowRect, titleBarHeight = TITLE_BAR_HEIGHT): number {
+	const maxY = Math.max(workArea.y, workArea.y + Math.max(0, workArea.h) - titleBarHeight)
+	return Math.min(maxY, Math.max(workArea.y, y))
+}
