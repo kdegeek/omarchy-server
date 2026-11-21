@@ -93,7 +93,7 @@ function Actions({onCancel, onSave, saving, disabled, label = 'Save', danger}: {
 		</div>
 	)
 }
-export function PendingBanner({d}: {d: MachineDetails}) {
+export function PendingBanner({d}: {d: Pick<MachineDetails, 'name'> & {pending?: boolean}}) {
 	if (!d.pending) return null
 	return (
 		<div className="mx-pending">

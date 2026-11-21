@@ -478,6 +478,8 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 	}
 
 	// ---- procedures -----------------------------------------------------------------------------
+	const forwardKey = (f) => `${f.protocol}:${f.hostPort}->${f.guestPort}`
+	const forwardsFor = (m, state) => (m.portForwards ?? []).map((f) => (state === 'running' && m.pending && Array.isArray(m.liveForwards) && !m.liveForwards.includes(forwardKey(f)) ? {...f, pending: true} : f))
 	async function list() {
 		await ready
 		touchWatch()
@@ -500,7 +502,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 				...(m.options?.protection ? {protected: true} : {}),
 				...(m.options?.onBoot ? {onBoot: true} : {}),
 				networkMode: 'nat',
-				portForwards: m.portForwards ?? [],
+				portForwards: forwardsFor(m, state),
 				...(b?.progress !== undefined ? {installProgress: b.progress} : {}),
 				...(state === 'error' && m.errorMessage ? {errorMessage: m.errorMessage} : {}),
 			}
@@ -604,6 +606,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 				await define(m)
 				step(97)
 				await virsh('start', domain(id))
+				m.liveForwards = (m.portForwards ?? []).map(forwardKey)
 				delete m.state
 				delete m.errorMessage
 				endTask(m, t)
@@ -667,7 +670,9 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			if (pending === 'starting' || pending === 'restarting') {
 				delete m.pending
 				delete m.hibernated
+				m.liveForwards = (m.portForwards ?? []).map(forwardKey)
 			}
+			if (pending === 'stopping' && verb(domain(m.id))[0] === 'destroy') delete m.liveForwards
 			if (pending === 'hibernating') m.hibernated = true
 			if (pending !== 'starting' && pending !== 'pausing' && pending !== 'resuming') await dropAnswerFile(m)
 			endTask(m, t)
@@ -755,6 +760,9 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 				seen.add(key)
 				return {id: typeof f.id === 'string' && /^[\w-]{1,40}$/.test(f.id) ? f.id : randomBytes(4).toString('hex'), protocol, hostPort, guestPort}
 			})
+			const running = (await liveState(m)) !== 'stopped'
+			if (running && m.liveForwards === undefined) m.liveForwards = (m.portForwards ?? []).map(forwardKey)
+			else if (!running) delete m.liveForwards
 			m.portForwards = next
 			await markChanged(m)
 		}
@@ -1027,7 +1035,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 				notes: m.options?.notes ?? '',
 			},
 			cloudInit: m.cloudInit && m.layout?.disks?.some((d) => d.role === 'seed') ? {username: m.cloudInit.username ?? '', hostname: m.cloudInit.hostname ?? hostnameFor(m.name, m.id), sshKeys: m.cloudInit.sshKeys ?? []} : null,
-			portForwards: m.portForwards ?? [],
+			portForwards: forwardsFor(m, live),
 			snapshots: m.snapshots ?? [],
 			tasks: (m.tasks ?? []).slice(0, 50),
 			guestIps,
@@ -1433,7 +1441,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 					}
 				}
 				// The settings, without task history or anything secret (no seed or answer file).
-				const machine = {...m, tasks: undefined, snapshots: undefined, answerIso: undefined, state: undefined, errorMessage: undefined, pending: undefined, hibernated: undefined}
+				const machine = {...m, tasks: undefined, snapshots: undefined, answerIso: undefined, state: undefined, errorMessage: undefined, pending: undefined, hibernated: undefined, liveForwards: undefined}
 				await writeFile(join(target, 'machine.json'), JSON.stringify({format: 1, sourceId: m.id, createdAt: Date.now(), notes, live: running, machine, disks: disks.map((d) => d.id)}, null, 2), {mode: 0o600})
 			} catch (error) {
 				await rm(target, {recursive: true, force: true})
@@ -1473,6 +1481,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			answerIso: undefined,
 			pending: undefined,
 			hibernated: undefined,
+			liveForwards: undefined,
 		})
 		machines.push(m)
 		busy.set(id, {state: 'installing', progress: 0})

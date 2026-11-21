@@ -365,3 +365,113 @@ test('#663: Start and pending Restart redefine the domain so missing definitions
 
 
 
+test('#200: port forwards added while running are marked pending until restart and UI warns instead of opening immediately', async (t) => {
+	const id = 'a1b2c3d4'
+	const doms = new Map()
+	let ignoreShutdown = false
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd !== 'virsh') return ''
+			const a = args[0] === '-c' ? args.slice(2) : args
+			if (a[0] === 'list') {
+				return ` Id   Name   State\n------------------\n${[...doms].map(([n, s]) => ` -    ${n}   ${s}`).join('\n')}\n`
+			}
+			if (a[0] === 'define') {
+				const xmlText = await readFile(a[1], 'utf8')
+				const name = /<name>(.+?)<\/name>/.exec(xmlText)[1]
+				if (!doms.has(name)) doms.set(name, 'shut off')
+				return ''
+			}
+			if (a[0] === 'start') {
+				doms.set(a[1], 'running')
+				return ''
+			}
+			if (a[0] === 'shutdown') {
+				if (!ignoreShutdown) doms.set(a[1], 'shut off')
+				return ''
+			}
+			if (a[0] === 'destroy') {
+				doms.set(a[1], 'shut off')
+				return ''
+			}
+			return ''
+		},
+	})
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	const rec = makeMachineRecord(env.dataDir, {
+		id,
+		portForwards: [{id: 'f1', protocol: 'tcp', hostPort: 42222, guestPort: 22}],
+	})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec]}))
+
+	const untilRunning = async () => {
+		const end = Date.now() + 5000
+		for (;;) {
+			const x = (await m.procedures['machines.list'].run()).find((v) => v.id === id)
+			if (x?.state === 'running') return x
+			if (Date.now() > end) throw new Error(`did not reach running (got ${x?.state})`)
+			await new Promise((r) => setTimeout(r, 50))
+		}
+	}
+
+	const m = env.open()
+	await m.ready
+	await m.procedures['machines.start'].run({id})
+	await untilRunning()
+
+	await m.procedures['machines.updateSettings'].run({
+		id,
+		portForwards: [
+			{id: 'f1', protocol: 'tcp', hostPort: 42222, guestPort: 22},
+			{id: 'f2', protocol: 'tcp', hostPort: 48080, guestPort: 80},
+		],
+	})
+
+	const listed = (await m.procedures['machines.list'].run()).find((x) => x.id === id)
+	const det = await m.procedures['machines.details'].run({id})
+	for (const view of [listed, det]) {
+		assert.equal(view.pending, true)
+		assert.equal(view.portForwards.find((f) => f.id === 'f1').pending, undefined)
+		assert.equal(view.portForwards.find((f) => f.id === 'f2').pending, true)
+	}
+
+	ignoreShutdown = true
+	await m.procedures['machines.stop'].run({id})
+	const stillRunning = await untilRunning()
+	assert.equal(stillRunning.state, 'running')
+	assert.equal(stillRunning.portForwards.find((f) => f.id === 'f2').pending, true)
+	ignoreShutdown = false
+	await m.procedures['machines.forceStop'].run({id})
+	await m.procedures['machines.start'].run({id})
+	await untilRunning()
+	await m.procedures['machines.updateSettings'].run({
+		id,
+		portForwards: [
+			{id: 'f1', protocol: 'tcp', hostPort: 42222, guestPort: 22},
+			{id: 'f2', protocol: 'tcp', hostPort: 48080, guestPort: 80},
+		],
+	})
+	await m.procedures['machines.restart'].run({id})
+	const afterRestart = await untilRunning()
+	assert.equal(afterRestart.pending, undefined)
+	assert.equal(afterRestart.portForwards.find((f) => f.id === 'f2').pending, undefined)
+
+	const {forwardAddMessage, forwardRemoveMessage} = await import('../web/src/machines/portForwardingState.ts')
+	assert.match(forwardAddMessage('Box', 'my.host', 48080, true), /applies the next time Box starts/)
+	assert.match(forwardAddMessage('Box', 'my.host', 48080, false), /when it starts/)
+	assert.match(forwardRemoveMessage('Box', 48080, true), /applies the next time Box starts/)
+	assert.equal(forwardRemoveMessage('Box', 48080, false), 'Removed port 48080')
+
+	const pfSrc = await readFile(new URL('../web/src/machines/PortForwarding.tsx', import.meta.url), 'utf8')
+	assert.match(pfSrc, /<PendingBanner d=\{m\} \/>/)
+	assert.match(pfSrc, /f\.pending/)
+	assert.match(pfSrc, /After restart/)
+})
+
+
+
+
+
+

@@ -7,7 +7,8 @@ import {useMachines} from '../data'
 import {Icon} from '../icons'
 import {haptic} from '../ui'
 import {useMachineAction} from './api'
-import {PORT_MAX, PORT_MIN, nextFreePort, takenPorts} from './portForwardingState'
+import {PendingBanner} from './panels'
+import {PORT_MAX, PORT_MIN, forwardAddMessage, forwardRemoveMessage, nextFreePort, takenPorts} from './portForwardingState'
 
 const PRESETS = [
 	{label: 'SSH', guestPort: 22, hostPort: 42222},
@@ -36,9 +37,10 @@ export function PortForwarding({machine: m}: {machine: Machine}) {
 	const inRange = Number.isInteger(h) && h >= PORT_MIN && h <= PORT_MAX
 	const portTaken = inRange && taken.has(`${protocol}:${h}`)
 	const valid = inRange && Number.isInteger(g) && g >= 1 && g <= 65_535 && !portTaken
-	const add = (hp: number, gp: number, proto: PortForward['protocol'], label: string) => {
+	const isLive = m.state === 'running' || m.state === 'suspended'
+	const add = (hp: number, gp: number, proto: PortForward['protocol']) => {
 		const id = `fwd-${Date.now().toString(36)}`
-		save([...forwards, {id, protocol: proto, hostPort: hp, guestPort: gp}], `${label}: ${host}:${hp} now leads to ${m.name}`, () => {
+		save([...forwards, {id, protocol: proto, hostPort: hp, guestPort: gp}], forwardAddMessage(m.name, host, hp, isLive), () => {
 			setAdding(false)
 			setHostPort('')
 			setGuestPort('')
@@ -47,6 +49,7 @@ export function PortForwarding({machine: m}: {machine: Machine}) {
 	return (
 		<section className="pf">
 			<h4 className="list-head">Port forwarding</h4>
+			<PendingBanner d={m} />
 			<p className="muted pf-note">
 				{m.name} is on the server’s private network{m.ipAddress ? ` (${m.ipAddress})` : ''}. Forward a port to reach a service inside it from your other devices.
 			</p>
@@ -62,16 +65,21 @@ export function PortForwarding({machine: m}: {machine: Machine}) {
 									{host}:{f.hostPort} · {f.protocol.toUpperCase()}
 								</span>
 							</span>
-							{f.protocol === 'tcp' && (
-								<a className="btn small" href={`http://${host}:${f.hostPort}`} target="_blank" rel="noreferrer">
-									Open
-								</a>
-							)}
+							{f.protocol === 'tcp' &&
+								(f.pending ? (
+									<button type="button" className="btn small" disabled title="Applies the next time the machine starts">
+										After restart
+									</button>
+								) : (
+									<a className="btn small" href={`http://${host}:${f.hostPort}`} target="_blank" rel="noreferrer">
+										Open
+									</a>
+								))}
 							<button
 								className="btn small"
 								disabled={action.isPending}
 								aria-label={`Remove forward ${f.hostPort}`}
-								onClick={() => save(forwards.filter((x) => x.id !== f.id), `Removed port ${f.hostPort}`)}
+								onClick={() => save(forwards.filter((x) => x.id !== f.id), forwardRemoveMessage(m.name, f.hostPort, isLive))}
 							>
 								Remove
 							</button>
@@ -120,7 +128,7 @@ export function PortForwarding({machine: m}: {machine: Machine}) {
 						<button className="btn small" onClick={() => setAdding(false)}>
 							Cancel
 						</button>
-						<button className="btn small primary" disabled={!valid || action.isPending} onClick={() => add(h, g, protocol, 'Forward added')}>
+						<button className="btn small primary" disabled={!valid || action.isPending} onClick={() => add(h, g, protocol)}>
 							Add forward
 						</button>
 					</div>

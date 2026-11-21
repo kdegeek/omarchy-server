@@ -22,3 +22,13 @@ export function nextFreePort(wanted: number, taken: ReadonlySet<string>, protoco
 	for (let p = PORT_MIN; p < start; p++) if (!taken.has(`${protocol}:${p}`)) return p
 	return PORT_MIN
 }
+
+export function forwardAddMessage(machineName: string, host: string, hostPort: number, running: boolean): string {
+	return running
+		? `Forward added — ${host}:${hostPort} applies the next time ${machineName} starts`
+		: `Forward added: ${host}:${hostPort} leads to ${machineName} when it starts`
+}
+
+export function forwardRemoveMessage(machineName: string, hostPort: number, running: boolean): string {
+	return running ? `Removed port ${hostPort} — applies the next time ${machineName} starts` : `Removed port ${hostPort}`
+}
