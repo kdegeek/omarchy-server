@@ -1976,8 +1976,8 @@ export function createApps({dataDir, home = os.homedir(), webPort = 7780, run = 
 						break
 					}
 				}
+				src ??= byId.get(a.id)
 			}
-			src ??= byId.get(a.id)
 			if (src?.version && a.version && src.version !== a.version) out.push({id: a.id, version: src.version})
 		}
 		return out

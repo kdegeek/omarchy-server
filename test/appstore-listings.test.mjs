@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict'
 import {execFileSync} from 'node:child_process'
 import {mkdir, mkdtemp, realpath, rm, writeFile} from 'node:fs/promises'
+import net from 'node:net'
 import os from 'node:os'
 import {join} from 'node:path'
 import {test} from 'node:test'
 
 import {createApps} from '../omarchyd/apps.mjs'
+
+function portAvailable(port) {
+	return new Promise((resolve) => {
+		const s = net.createServer()
+		s.once('error', () => resolve(false))
+		s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)))
+	})
+}
+
+async function pickPort(start = 30000 + Math.floor(Math.random() * 2000)) {
+	for (let p = start; p < start + 200; p++) if (await portAvailable(p)) return p
+	throw new Error('no free port found')
+}
 
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {cwd, stdio: 'pipe'}).toString()
 
@@ -96,4 +110,71 @@ test('store apps with purely numeric ids are listed as string ids', async (t) =>
 	assert.deepEqual(demo.needs, ['2048'])
 	const detail = await apps.procedures['appStore.app'].run({appId: '2048'})
 	assert.equal(detail.id, '2048')
+})
+
+test('apps.updates does not offer an update from a different store when the original store is gone', async (t) => {
+	const root = await realpath(await mkdtemp(join(os.tmpdir(), 'appstore-listings-137-')))
+	const prevDockerHost = process.env.DOCKER_HOST
+	t.after(async () => {
+		if (prevDockerHost === undefined) delete process.env.DOCKER_HOST
+		else process.env.DOCKER_HOST = prevDockerHost
+		await rm(root, {recursive: true, force: true})
+	})
+
+	const portA = await pickPort()
+	const portB = await pickPort(portA + 1)
+	const sock = join(root, 'podman.sock')
+	await writeFile(sock, '')
+	process.env.DOCKER_HOST = `unix://${sock}`
+
+	const storeA = await initStore(root, 'store-a', [
+		{folder: 'demo-app', yml: `manifestVersion: 1\nid: demo-app\nname: Demo\nversion: "1.0"\nport: ${portA}\nweb:\n  service: web\n  port: 80\n`},
+	])
+	const storeB = await initStore(root, 'store-b', [
+		{folder: 'demo-app', yml: `manifestVersion: 1\nid: demo-app\nname: Demo\nversion: "2.0"\nport: ${portB}\nweb:\n  service: web\n  port: 80\n`},
+	])
+
+	const up = new Set()
+	const run = async (cmd, args, opts = {}) => {
+		if (cmd === 'git') return execFileSync('git', args, {cwd: opts.cwd, stdio: 'pipe'}).toString()
+		if (cmd === 'docker-compose') {
+			if (args[0] === 'version') return 'Docker Compose version v2.30.0'
+			const verb = args.find((a) => ['up', 'stop', 'restart', 'pull', 'ps', 'down'].includes(a))
+			if (verb === 'up' || verb === 'restart') up.add(args[1])
+			if (verb === 'stop' || verb === 'down') up.delete(args[1])
+			if (verb === 'ps') return JSON.stringify([{Service: 'web', State: up.has(args[1]) ? 'running' : 'exited'}])
+			return ''
+		}
+		if (cmd === 'podman') {
+			if (args[0] === 'info') return '{}'
+			if (args[0] === 'ps') return JSON.stringify([...up].map((p) => ({Labels: {'com.docker.compose.project': p}, State: 'running'})))
+			if (args[1] === 'rm') execFileSync('rm', args.slice(2))
+			return ''
+		}
+		if (cmd === 'setfacl') return ''
+		return ''
+	}
+
+	const apps = createApps({dataDir: join(root, 'data'), home: join(root, 'home'), allowFileStores: true, gatewayHost: '127.0.0.1', defaultStores: [], systemApps: null, run})
+	t.after(() => apps.close())
+
+	await apps.procedures['appStore.addRepository'].run({url: storeA.url})
+	await apps.procedures['appStore.addRepository'].run({url: storeB.url})
+	await apps.procedures['apps.install'].run({appId: 'demo-app'})
+	for (let i = 0; i < 120; i++) {
+		const list = await apps.procedures['apps.list'].run()
+		if (list.find((a) => a.id === 'demo-app' && a.state === 'running')) break
+		await new Promise((r) => setTimeout(r, 40))
+	}
+
+	await writeFile(join(storeA.work, 'demo-app', 'omarchy-app.yml'), `manifestVersion: 1\nid: demo-app\nname: Demo\nversion: "1.5"\nport: ${portA}\nweb:\n  service: web\n  port: 80\n`)
+	git(storeA.work, 'add', '-A')
+	git(storeA.work, 'commit', '-qm', 'v1.5')
+	git(storeA.work, 'push', '-q', 'origin', 'HEAD:main')
+	await apps.procedures['appStore.refresh'].run()
+	assert.deepEqual(await apps.procedures['apps.updates'].run(), [{id: 'demo-app', version: '1.5'}])
+
+	await apps.procedures['appStore.removeRepository'].run({url: storeA.url})
+	assert.deepEqual(await apps.procedures['apps.updates'].run(), [])
+	await assert.rejects(apps.procedures['apps.update'].run({appId: 'demo-app'}), (e) => e.code === 'NOT_FOUND')
 })
