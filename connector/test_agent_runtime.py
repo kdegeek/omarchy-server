@@ -110,5 +110,73 @@ class ChannelWriteNonBlocking(unittest.TestCase):
         finally:
             release.set()
 
+
+class HungNetworkShare(unittest.TestCase):
+    # #546: one hung network mount must not stall disks() or the rest of Sampler.
+    def test_disks_skips_hung_mount_and_does_not_pile_up(self):
+        mounts = "srv:/export /mnt/nas nfs4 rw 0 0\n/dev/sda1 / ext4 rw 0 0\n"
+        release = threading.Event()
+        nas_calls = {"n": 0}
+        ok_st = mock.Mock(f_blocks=100, f_frsize=4096, f_bfree=40)
+
+        def fake_statvfs(path):
+            if path == "/mnt/nas":
+                nas_calls["n"] += 1
+                release.wait(5)
+                raise OSError("timed out")
+            return ok_st
+
+        try:
+            with mock.patch.object(agent, "read", lambda p, *a: mounts if p == "/proc/mounts" else ""), mock.patch("os.statvfs", side_effect=fake_statvfs):
+                t0 = time.monotonic()
+                got = agent.disks(stat_timeout=0.15)
+                dt = time.monotonic() - t0
+                self.assertLess(dt, 1.0)
+                self.assertEqual(got, [{"mount": "/", "total": 409600, "used": 245760}])
+                got2 = agent.disks(stat_timeout=0.15)
+                self.assertEqual(got2, [{"mount": "/", "total": 409600, "used": 245760}])
+                self.assertEqual(nas_calls["n"], 1)
+        finally:
+            release.set()
+            time.sleep(0.05)
+
+    def test_sampler_keeps_updating_when_disk_hangs(self):
+        release = threading.Event()
+        clock = {"n": 100.0}
+        counts = {"mem": 0, "up": 0}
+
+        def mem():
+            counts["mem"] += 1
+            return {"total": 1000, "used": counts["mem"] * 10}, {"total": 0, "used": 0}
+
+        def up():
+            counts["up"] += 1
+            return counts["up"] * 10.0
+
+        def hung_disk():
+            release.wait(5)
+            return []
+
+        s = agent.create_sampler(
+            now=lambda: clock["n"],
+            intervals={**agent.DEFAULT_INTERVALS, "memory": 1, "uptime": 1, "disk": 1},
+            read={"cpu": lambda: 5.0, "memory": mem, "uptime": up, "disk": hung_disk},
+            spawn=lambda target: object(),
+        )
+        try:
+            t0 = time.monotonic()
+            snap = s.get()
+            self.assertLess(time.monotonic() - t0, 1.0)
+            self.assertEqual(snap["mem"]["used"], 10)
+            self.assertEqual(snap["uptime"], 10.0)
+            clock["n"] += 1.0
+            self.assertTrue(s.service())
+            self.assertEqual(s.peek()["mem"]["used"], 20)
+            self.assertEqual(s.peek()["uptime"], 20.0)
+        finally:
+            release.set()
+            s.stop()
+            time.sleep(0.05)
+
 if __name__ == "__main__":
     unittest.main()

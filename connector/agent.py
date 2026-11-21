@@ -288,10 +288,49 @@ def meminfo():
 
 
 REAL_FS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs", "reiserfs", "bcachefs", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "nfs", "nfs4", "cifs"}
+STATVFS_TIMEOUT = 2.0
+_statvfs_lock = threading.Lock()
+_statvfs_busy = set()
 
 
-def disks():
-    out, seen = [], set()
+def _statvfs_all(mounts, timeout):
+    # Each statvfs runs in its own worker with a shared timeout so one unreachable
+    # network share cannot stall local disks or block the caller. Busy mounts stay
+    # skipped until their stuck call returns instead of piling up threads.
+    statvfs = os.statvfs
+    results = {}
+    res_lock = threading.Lock()
+    threads = []
+
+    def probe(mount):
+        try:
+            st = statvfs(mount)
+            with res_lock:
+                results[mount] = st
+        except OSError:
+            pass
+        finally:
+            with _statvfs_lock:
+                _statvfs_busy.discard(mount)
+
+    for mount in dict.fromkeys(mounts):
+        with _statvfs_lock:
+            if mount in _statvfs_busy:
+                continue
+            _statvfs_busy.add(mount)
+        t = threading.Thread(target=probe, args=(mount,), daemon=True)
+        t.start()
+        threads.append(t)
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    for t in threads:
+        t.join(timeout=max(0.0, deadline - time.monotonic()))
+    with res_lock:
+        return dict(results)
+
+
+def disks(stat_timeout=STATVFS_TIMEOUT):
+    candidates, seen = [], set()
     for line in read("/proc/mounts").splitlines():
         p = line.split()
         if len(p) < 3 or p[2] not in REAL_FS or p[0] in seen:
@@ -300,9 +339,12 @@ def disks():
         if any(mount == p or mount.startswith(p + "/") for p in ("/boot", "/snap", "/var/lib/docker", "/var/lib/containers")):
             continue
         seen.add(p[0])
-        try:
-            st = os.statvfs(mount)
-        except OSError:
+        candidates.append(mount)
+    stats = _statvfs_all(candidates, stat_timeout)
+    out = []
+    for mount in candidates:
+        st = stats.get(mount)
+        if not st:
             continue
         total = st.f_blocks * st.f_frsize
         if total:
@@ -645,7 +687,8 @@ class Sampler:
         self._lock = threading.Lock()
         self._last_read = 0
         self._primed = False
-        self._gpu_running = False
+        self._running = set()
+        self._run_lock = threading.Lock()
         if spawn is not None:
             self._spawn = spawn
 
@@ -666,6 +709,32 @@ class Sampler:
         except Exception:
             pass
 
+    def _take_async(self, key, snap_key, t, wait, join_s=0):
+        if not self._due(key) or key not in self._read:
+            return
+        with self._run_lock:
+            if key in self._running:
+                return
+            self._running.add(key)
+        self._last[key] = t
+
+        def run():
+            try:
+                self._snap[snap_key] = self._read[key]()
+            except Exception:
+                pass
+            finally:
+                with self._run_lock:
+                    self._running.discard(key)
+
+        if wait:
+            run()
+        else:
+            th = threading.Thread(target=run, daemon=True)
+            th.start()
+            if join_s:
+                th.join(timeout=join_s)
+
     def tick(self, wait_gpu=True):
         if self._stopped:
             return self._snap
@@ -679,24 +748,9 @@ class Sampler:
         self._take("memory", mem, t)
         self._take("temp", lambda v: self._snap.update(temp=v), t)
         self._take("battery", lambda v: self._snap.update(batteries=v), t)
-        self._take("disk", lambda v: self._snap.update(disks=v), t)
         self._take("uptime", lambda v: self._snap.update(uptime=v), t)
-        if self._due("gpu") and "gpu" in self._read and not self._gpu_running:
-            self._last["gpu"] = t
-            self._gpu_running = True
-
-            def run_gpu():
-                try:
-                    self._snap["gpus"] = self._read["gpu"]()
-                except Exception:
-                    pass
-                finally:
-                    self._gpu_running = False
-
-            if wait_gpu:
-                run_gpu()
-            else:
-                threading.Thread(target=run_gpu, daemon=True).start()
+        self._take_async("disk", "disks", t, wait_gpu, join_s=0.2)
+        self._take_async("gpu", "gpus", t, wait_gpu)
         return self._snap
 
     def _spawn(self, target):
