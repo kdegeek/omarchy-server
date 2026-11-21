@@ -611,6 +611,58 @@ test('#312: hardware, options, and drive changes are rejected while a backup is 
 	assert.match(definedXml[0], /<memory unit='MiB'>2048<\/memory>/)
 })
 
+test('#314: ejecting CD/DVD media from a running machine reports QEMU errors and preserves media', async (t) => {
+	const id = 'a1b2c3d4'
+	let failEject = true
+	let lastXml = ''
+	const doms = new Map([[`omarchy-${id}`, 'running']])
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd !== 'virsh') return ''
+			const a = args[0] === '-c' ? args.slice(2) : args
+			if (a[0] === 'list') {
+				return ` Id   Name   State\n------------------\n${[...doms].map(([n, s]) => ` -    ${n}   ${s}`).join('\n')}\n`
+			}
+			if (a[0] === 'define') {
+				lastXml = await readFile(a[1], 'utf8')
+				return ''
+			}
+			if (a[0] === 'change-media' && a.includes('--eject') && failEject) {
+				throw new Error("virsh change-media: error: internal error: unable to execute QEMU command 'eject': Device 'sata0-0-0' is locked and force was not specified")
+			}
+			return ''
+		},
+	})
+	const homeDir = join(env.root, 'home')
+	await mkdir(homeDir, {recursive: true})
+	const isoPath = join(homeDir, 'boot.iso')
+	await writeFile(isoPath, 'iso')
+	const files = {resolve: async (p) => ({real: p === '/Home' ? homeDir : join(homeDir, p.replace(/^\/Home\/?/, ''))})}
+
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	const rec = makeMachineRecord(env.dataDir, {id})
+	rec.layout.disks.push({id: 'cd0', file: isoPath, device: 'cdrom', bus: 'sata', format: 'raw'})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec]}))
+
+	const m = env.open({files})
+	await m.ready
+
+	await assert.rejects(() => m.procedures['machines.setMedia'].run({id, diskId: 'cd0', iso: null}), /locked/)
+	const afterFail = await m.procedures['machines.details'].run({id})
+	assert.equal(afterFail.hardware.disks.find((d) => d.id === 'cd0').media, 'Home/boot.iso')
+	assert.equal(afterFail.tasks[0].type, 'eject-media')
+	assert.equal(afterFail.tasks[0].status, 'error')
+
+	failEject = false
+	assert.equal(await m.procedures['machines.setMedia'].run({id, diskId: 'cd0', iso: null}), true)
+	const afterOk = await m.procedures['machines.details'].run({id})
+	assert.equal(afterOk.hardware.disks.find((d) => d.id === 'cd0').media, null)
+	assert.equal(lastXml.includes('boot.iso'), false)
+})
+
+
 
 
 

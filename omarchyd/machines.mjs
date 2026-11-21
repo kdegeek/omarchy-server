@@ -1305,10 +1305,16 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 			if ((await liveState(m)) === 'running') {
 				const dev = targets(m.layout).get(d.id)
 				if (file) await virsh('change-media', domain(m.id), dev, file, '--update', '--live')
-				else await virsh('change-media', domain(m.id), dev, '--eject', '--live').catch(() => {})
+				else if (d.file) await virsh('change-media', domain(m.id), dev, '--eject', '--live')
 			}
+			const prevFile = d.file
 			d.file = file
-			if (m.state !== 'error') await define(m)
+			try {
+				if (m.state !== 'error') await define(m)
+			} catch (error) {
+				d.file = prevFile
+				throw error
+			}
 			await save()
 			return true
 		})
