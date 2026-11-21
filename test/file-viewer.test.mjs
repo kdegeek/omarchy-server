@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {test} from 'node:test'
+import JSZip from 'jszip'
+import mammoth from 'mammoth'
 import {Marked} from 'marked'
 
 import {
@@ -146,4 +148,74 @@ test('FileViewer TextView uses renderMarkdownHtml and handleDocumentLinkClick', 
 	assert.match(src, /renderMarkdownHtml/)
 	assert.match(src, /fv-md[\s\S]{0,160}handleDocumentLinkClick/)
 	assert.doesNotMatch(src, /if \(a\?\.href\)/)
+})
+
+test('DocxView handles mammoth internal bookmark links and external links safely', async () => {
+	const zip = new JSZip()
+	zip.file(
+		'[Content_Types].xml',
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+			'<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+			'<Default Extension="xml" ContentType="application/xml"/>' +
+			'<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+			'</Types>',
+	)
+	zip.file(
+		'_rels/.rels',
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+			'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+			'</Relationships>',
+	)
+	zip.file(
+		'word/_rels/document.xml.rels',
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+			'<Relationship Id="rIdExt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/" TargetMode="External"/>' +
+			'<Relationship Id="rIdMail" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="mailto:help@example.com" TargetMode="External"/>' +
+			'</Relationships>',
+	)
+	zip.file(
+		'word/document.xml',
+		'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+			'<w:body>' +
+			'<w:p><w:hyperlink w:anchor="_Toc1"><w:r><w:t>Go to chapter</w:t></w:r></w:hyperlink></w:p>' +
+			'<w:p><w:hyperlink r:id="rIdExt"><w:r><w:t>site</w:t></w:r></w:hyperlink></w:p>' +
+			'<w:p><w:hyperlink r:id="rIdMail"><w:r><w:t>email</w:t></w:r></w:hyperlink></w:p>' +
+			'<w:p><w:bookmarkStart w:id="0" w:name="_Toc1"/><w:r><w:t>Chapter</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>' +
+			'</w:body></w:document>',
+	)
+	const buffer = await zip.generateAsync({type: 'nodebuffer'})
+	const {value: html} = await mammoth.convertToHtml({buffer})
+	assert.match(html, /href="#_Toc1"/)
+	assert.match(html, /id="_Toc1"/)
+	assert.match(html, /href="https:\/\/example\.com\/"/)
+	assert.match(html, /href="mailto:help@example\.com"/)
+
+	const scrolled = []
+	const bookmark = {
+		id: '_Toc1',
+		getAttribute: () => null,
+		scrollIntoView: (opts) => scrolled.push(opts),
+	}
+	const opened = []
+	const tocClick = makeAnchorEvent('#_Toc1', [bookmark])
+	assert.deepEqual(handleDocumentLinkClick(tocClick.event, (u) => opened.push(u)), {kind: 'anchor', id: '_Toc1'})
+	assert.equal(tocClick.isPrevented(), true)
+	assert.deepEqual(scrolled, [{block: 'start'}])
+	assert.deepEqual(opened, [])
+
+	const extClick = makeAnchorEvent('https://example.com/', [bookmark])
+	assert.deepEqual(handleDocumentLinkClick(extClick.event, (u) => opened.push(u)), {kind: 'external', url: 'https://example.com/'})
+	assert.equal(extClick.isPrevented(), true)
+	assert.deepEqual(opened, ['https://example.com/'])
+
+	const mailClick = makeAnchorEvent('mailto:help@example.com', [bookmark])
+	assert.deepEqual(handleDocumentLinkClick(mailClick.event, (u) => opened.push(u)), {kind: 'mailto'})
+	assert.equal(mailClick.isPrevented(), false)
+
+	const src = await readFile(new URL('../web/src/screens/viewer/FileViewer.tsx', import.meta.url), 'utf8')
+	assert.match(src, /fv-paper[\s\S]{0,160}handleDocumentLinkClick/)
 })

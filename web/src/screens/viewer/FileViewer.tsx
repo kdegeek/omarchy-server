@@ -909,7 +909,11 @@ function DocxView(b: BodyProps) {
   if (loading || html == null) return <Loading />;
   return (
     <div className="fv-scroll fv-paper-bg">
-      <article className="fv-paper" dangerouslySetInnerHTML={{ __html: html || "<p><i>This document is empty.</i></p>" }} />
+      <article
+        className="fv-paper"
+        dangerouslySetInnerHTML={{ __html: html || "<p><i>This document is empty.</i></p>" }}
+        onClick={(e) => void handleDocumentLinkClick(e)}
+      />
     </div>
   );
 }
