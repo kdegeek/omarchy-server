@@ -118,4 +118,25 @@ export function sharePasswordAction({
 /** Query keys invalidated once an upload batch finishes so both listings and Recents update. */
 export const UPLOAD_REFRESH_KEYS = [['files.list'], ['files.recents']] as const
 
+const COPY_SUFFIX_RE = / \(([2-9]|[1-9]\d+)\)$/
+
+/** Remove a keep-both "(2)" suffix from a filename so collision copies still match originals. */
+export function stripCopySuffix(name: string): string {
+	if (COPY_SUFFIX_RE.test(name)) return name.replace(COPY_SUFFIX_RE, '')
+	const dot = name.lastIndexOf('.')
+	if (dot <= 0) return name
+	return name.slice(0, dot).replace(COPY_SUFFIX_RE, '') + name.slice(dot)
+}
+
+/** Return picked photos whose name (or keep-both base name) and size are not already in Photos. */
+export function filterUnsyncedPhotos<T extends {name: string; size: number}>(picked: T[], existing: FileEntry[]): T[] {
+	const have = new Set<string>()
+	for (const f of existing) {
+		if (f.type === 'directory') continue
+		have.add(`${f.name}:${f.size}`)
+		have.add(`${stripCopySuffix(f.name)}:${f.size}`)
+	}
+	return picked.filter((f) => !have.has(`${f.name}:${f.size}`) && !have.has(`${stripCopySuffix(f.name)}:${f.size}`))
+}
+
 export type {FileEntry}

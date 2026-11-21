@@ -244,3 +244,31 @@ describe('files screen: #197 refresh Recents after uploads', () => {
 		assert.match(src, /for \(const key of UPLOAD_REFRESH_KEYS\)\s*qc\.invalidateQueries\(\{ queryKey: \[...key\] \}\)/)
 	})
 })
+
+describe('files screen: #489 Sync photos recognizes keep-both copies', () => {
+	test('stripCopySuffix strips (2)+ before the extension or end of name', () => {
+		assert.equal(helpers.stripCopySuffix('IMG_0001 (2).jpg'), 'IMG_0001.jpg')
+		assert.equal(helpers.stripCopySuffix('IMG_0001 (12).HEIC'), 'IMG_0001.HEIC')
+		assert.equal(helpers.stripCopySuffix('Photo (2)'), 'Photo')
+		assert.equal(helpers.stripCopySuffix('clip (final) (3).mp4'), 'clip (final).mp4')
+		assert.equal(helpers.stripCopySuffix('IMG_0001 (1).jpg'), 'IMG_0001 (1).jpg')
+		assert.equal(helpers.stripCopySuffix('IMG_0001.jpg'), 'IMG_0001.jpg')
+	})
+
+	test('filterUnsyncedPhotos treats keep-both copies with matching size as already synced', () => {
+		const existing = [
+			{name: 'IMG_0001.jpg', path: '/Home/Photos/IMG_0001.jpg', type: 'image/jpeg', size: 1000, modified: 1, operations: []},
+			{name: 'IMG_0001 (2).jpg', path: '/Home/Photos/IMG_0001 (2).jpg', type: 'image/jpeg', size: 2000, modified: 2, operations: []},
+			{name: 'Album', path: '/Home/Photos/Album', type: 'directory', modified: 3, operations: []},
+		]
+		assert.deepEqual(helpers.filterUnsyncedPhotos([{name: 'IMG_0001.jpg', size: 2000}], existing), [])
+		assert.deepEqual(helpers.filterUnsyncedPhotos([{name: 'IMG_0001 (2).jpg', size: 2000}], existing), [])
+		const brandNew = {name: 'IMG_0001.jpg', size: 3000}
+		assert.deepEqual(helpers.filterUnsyncedPhotos([brandNew], existing), [brandNew])
+	})
+
+	test('Files.tsx uses filterUnsyncedPhotos in photoInput onChange', async () => {
+		const src = await filesSource()
+		assert.match(src, /const fresh = filterUnsyncedPhotos\(picked, listing\.data\?\.files \?\? \[\]\);/)
+	})
+})
