@@ -127,3 +127,21 @@ describe('files screen: #441 new folder NamePrompt submit state', () => {
 		assert.doesNotMatch(src, /disabled=\{!valid \|\| busy \|\| name === initial\}/)
 	})
 })
+
+describe('files screen: #491 clear selection when search changes', () => {
+	test('nextSearchSelection clears selection when query text changes and preserves empty set', () => {
+		const sel = new Set(['/Home/a.txt', '/Home/b.txt'])
+		assert.equal(helpers.nextSearchSelection(sel, '', 'a').size, 0)
+		assert.equal(helpers.nextSearchSelection(sel, 'a', 'ab').size, 0)
+		assert.equal(helpers.nextSearchSelection(sel, 'a', '').size, 0)
+		const empty = new Set()
+		assert.equal(helpers.nextSearchSelection(empty, '', 'a'), empty)
+		assert.equal(helpers.nextSearchSelection(sel, 'a', 'a'), sel)
+	})
+
+	test('Files.tsx clears selected items when q changes', async () => {
+		const src = await filesSource()
+		assert.match(src, /setSelected\(\(s\) => nextSearchSelection\(s, prevQ\.current, q\)\)/)
+		assert.match(src, /setSelected\(\(s\) => nextSearchSelection\(s, q, next\)\)/)
+	})
+})

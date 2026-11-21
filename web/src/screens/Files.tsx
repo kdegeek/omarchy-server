@@ -27,7 +27,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
-import { batchToastMessage, canSubmitNamePrompt, runFileBatch } from "../filesHelpers";
+import { batchToastMessage, canSubmitNamePrompt, nextSearchSelection, runFileBatch } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -401,6 +401,12 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
     else sessionStorage.removeItem("omarchy-server:files-path");
     setSelected(new Set());
   }, [path]);
+
+  const prevQ = useRef(q);
+  useEffect(() => {
+    setSelected((s) => nextSearchSelection(s, prevQ.current, q));
+    prevQ.current = q;
+  }, [q]);
 
   const listing = useListing(path, sort);
   const recents = useQuery({
@@ -859,7 +865,10 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
       {Header}
       <SearchField
         value={q}
-        onChange={setQ}
+        onChange={(next) => {
+          setSelected((s) => nextSearchSelection(s, q, next));
+          setQ(next);
+        }}
         placeholder={path === null ? "Search all files" : `Search files`}
       />
       {canUpload && !q && !selecting && (

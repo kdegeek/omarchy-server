@@ -66,4 +66,10 @@ export function canSubmitNamePrompt({
 	return true
 }
 
+/** Clear selected paths whenever the search text changes so hidden items cannot stay selected. */
+export function nextSearchSelection(selected: Set<string>, prevQuery: string, nextQuery: string): Set<string> {
+	if (prevQuery === nextQuery || selected.size === 0) return selected
+	return new Set()
+}
+
 export type {FileEntry}
