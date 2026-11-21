@@ -23,7 +23,7 @@ import {injectConsoleKey, keysymFromEvent, lastMinimizedOn, releaseConsoleSuper,
 import {CAPTURE_KEY, ONBOARDING_KEY, canUseKeyboardLock, chipIntent, keyboardLockApi, onCaptureModeChange, onFullscreenChange, resolveMode, toggleLock, type GrabState} from './hyprland/grab'
 import {isSuper, resolveHyprKey, type Action} from './hyprland/keymap'
 import {Launcher} from './hyprland/Launcher'
-import {GAP, collapse, contains, firstLeaf, flipSplit, focusDir, insert as insertTile, isNode, reconcile, rects as tileRectsOf, remove as removeTile, swapDir, type Node} from './hyprland/layout'
+import {GAP, collapse, contains, firstLeaf, flipSplit, focusDir, insert as insertTile, isNode, moveWorkspace, reconcile, rects as tileRectsOf, remove as removeTile, swapDir, type Node} from './hyprland/layout'
 import {Onboarding} from './hyprland/Onboarding'
 import {desktopIconKeyAction, shouldClearDesktopSelection} from './desktopIcons'
 import {addStartingMachine, reconcileStartingMachines, type StartingMachine} from './machineStart'
@@ -622,15 +622,17 @@ export function Desktop({boot, prefs, setPrefs, onSignedOut, reopenAssistant}: {
 			return void setHyprWs((n) => (n === 1 ? 9 : n - 1))
 		}
 		if (act.type === 'move-workspace' && focused) {
-			dropFromTrees(focused.id)
+			if (act.n === ws) return
 			update(focused.id, {workspace: act.n})
-			if (!focused.float) {
-				setTrees((ts) => {
-					const t = ts[act.n] ?? null
-					const other = topTileOn(act.n, focused.id)
-					return {...ts, [act.n]: insertTile(t, other?.id ?? firstLeaf(t), focused.id, usable(), GAP, hiddenIds(act.n))}
-				})
-			}
+			setTrees((ts) =>
+				moveWorkspace(ts, focused.id, ws, act.n, {
+					floating: focused.float,
+					targetFocusId: topTileOn(act.n, focused.id)?.id,
+					area: usable(),
+					gap: GAP,
+					hidden: hiddenIds(act.n),
+				}),
+			)
 			setHyprWs(act.n)
 			return
 		}
