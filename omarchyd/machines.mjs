@@ -750,6 +750,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 	async function updateSettings(input) {
 		await ready
 		const m = find(input?.id)
+		if (isBusy(m.id)) throw new RpcError('CONFLICT', `${m.name} is busy`)
 		if (input.portForwards !== undefined) {
 			if (!Array.isArray(input.portForwards) || input.portForwards.length > 32) throw new RpcError('BAD_REQUEST', 'Invalid port forwards')
 			const seen = new Set()
@@ -823,7 +824,8 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 	}
 	// A changed definition: libvirt keeps it for the next start. While running, it's pending until then.
 	async function markChanged(m) {
-		if (m.state !== 'error' && !isBusy(m.id)) {
+		if (m.state !== 'error') {
+			if (isBusy(m.id)) throw new RpcError('CONFLICT', `${m.name} is busy`)
 			await define(m)
 			if ((await liveState(m)) !== 'stopped') m.pending = true
 		}
@@ -831,6 +833,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 	}
 	const writable = (m) => {
 		if (m.state === 'error' || busy.get(m.id)?.state === 'installing') throw new RpcError('PRECONDITION_FAILED', `${m.name} isn’t set up yet`)
+		if (isBusy(m.id)) throw new RpcError('CONFLICT', `${m.name} is busy`)
 	}
 
 	// Live usage: sampled often for the last reading; the hour chart keeps a coarser series.
@@ -1105,6 +1108,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 	async function updateOptions(input = {}) {
 		await ready
 		const m = find(input.id)
+		if (isBusy(m.id)) throw new RpcError('CONFLICT', `${m.name} is busy`)
 		const o = {...m.options}
 		let nextName = m.name
 		if (input.name !== undefined) {

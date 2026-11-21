@@ -534,6 +534,84 @@ test('#306: control characters in notes or name never break later settings chang
 	assert.equal(saved.machines[0].memoryMb, 1024)
 })
 
+test('#312: hardware, options, and drive changes are rejected while a backup is running', async (t) => {
+	const id = 'a1b2c3d4'
+	let releaseConvert = null
+	let convertStarted = null
+	const convertWait = new Promise((r) => (convertStarted = r))
+	const convertDone = new Promise((r) => (releaseConvert = r))
+	t.after(() => releaseConvert?.())
+
+	const definedXml = []
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd === 'virsh') {
+				const a = args[0] === '-c' ? args.slice(2) : args
+				if (a[0] === 'list') return ' Id   Name   State\n------------------\n'
+				if (a[0] === 'define') {
+					definedXml.push(await readFile(a[1], 'utf8'))
+					return ''
+				}
+				return ''
+			}
+			if (cmd === 'qemu-img' && args[0] === 'convert') {
+				convertStarted()
+				await convertDone
+				await writeFile(args.at(-1), 'backup-copy')
+				return ''
+			}
+			return ''
+		},
+	})
+	const homeDir = join(env.root, 'home')
+	await mkdir(homeDir, {recursive: true})
+	await writeFile(join(homeDir, 'boot.iso'), 'iso')
+	const files = {resolve: async (p) => ({real: p === '/Home' ? homeDir : join(homeDir, p.replace(/^\/Home\/?/, ''))})}
+
+	const vmDir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(vmDir, {recursive: true})
+	await writeFile(join(vmDir, 'disk.qcow2'), 'd0')
+	const rec = makeMachineRecord(env.dataDir, {id})
+	rec.layout.disks.push({id: 'cd0', file: '', device: 'cdrom', bus: 'sata', format: 'raw'})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec]}))
+
+	const m = env.open({files})
+	await m.ready
+
+	await m.procedures['machines.backup'].run({id})
+	await convertWait
+
+	const busyCalls = [
+		() => m.procedures['machines.updateHardware'].run({id, memoryMb: 2048}),
+		() => m.procedures['machines.addDisk'].run({id, sizeGb: 5}),
+		() => m.procedures['machines.updateOptions'].run({id, notes: 'during backup'}),
+		() => m.procedures['machines.updateSettings'].run({id, portForwards: [{protocol: 'tcp', hostPort: 42222, guestPort: 22}]}),
+		() => m.procedures['machines.setBootOrder'].run({id, order: ['disk0', 'net']}),
+		() => m.procedures['machines.updateDisk'].run({id, diskId: 'disk0', cache: 'writeback'}),
+		() => m.procedures['machines.resizeDisk'].run({id, diskId: 'disk0', sizeGb: 25}),
+		() => m.procedures['machines.setMedia'].run({id, diskId: 'cd0', iso: 'local:/Home/boot.iso'}),
+	]
+	for (const fn of busyCalls) {
+		await assert.rejects(fn, (err) => err instanceof RpcError && err.code === 'CONFLICT' && /is busy/.test(err.message))
+	}
+	assert.equal(definedXml.length, 0)
+	const detWhileBusy = await m.procedures['machines.details'].run({id})
+	assert.equal(detWhileBusy.hardware.memoryMb, 1024)
+	assert.equal(detWhileBusy.hardware.disks.length, 3)
+
+	releaseConvert()
+	const end = Date.now() + 5000
+	while ((await m.procedures['machines.backups'].run({id})).length === 0) {
+		if (Date.now() > end) throw new Error('backup did not finish')
+		await new Promise((r) => setTimeout(r, 20))
+	}
+
+	assert.equal(await m.procedures['machines.updateHardware'].run({id, memoryMb: 2048}), true)
+	assert.equal(definedXml.length, 1)
+	assert.match(definedXml[0], /<memory unit='MiB'>2048<\/memory>/)
+})
+
+
 
 
 
