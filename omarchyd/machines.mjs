@@ -1263,6 +1263,7 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 	// Internal qcow2 snapshots of every disk, taken while the machine is shut down, with the
 	// machine's settings at that moment. (UEFI variables aren't part of a snapshot.)
 	const SNAP = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/
+	const SNAPSHOT_MISSING = /can't find (?:the )?snapshot|snapshot .* (?:not found|does not exist)|no such snapshot/i
 	const qcowDisks = (m) => m.layout.disks.filter((d) => d.device === 'disk' && d.format === 'qcow2')
 	async function snapshot(input = {}) {
 		await ready
@@ -1315,7 +1316,14 @@ export function createMachines({dataDir, catalogUrl = CATALOG_URL, fetchImpl = f
 		if (!snap) throw new RpcError('NOT_FOUND', 'That snapshot doesn’t exist')
 		await requireStopped(m, 'delete a snapshot')
 		return task(m, 'delete-snapshot', snap.name, async () => {
-			for (const d of qcowDisks(m)) if (snap.config.disks.includes(d.id)) await run('qemu-img', ['snapshot', '-d', snap.name, d.file], {timeout: 10 * 60_000}).catch(() => {})
+			for (const d of qcowDisks(m)) {
+				if (!snap.config.disks.includes(d.id)) continue
+				try {
+					await run('qemu-img', ['snapshot', '-d', snap.name, d.file], {timeout: 10 * 60_000})
+				} catch (error) {
+					if (!SNAPSHOT_MISSING.test(String(error?.message ?? error))) throw error
+				}
+			}
 			m.snapshots = m.snapshots.filter((x) => x !== snap)
 			await save()
 			return true

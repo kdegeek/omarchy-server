@@ -1,7 +1,80 @@
 // Reliability fixes for omarchyd machines and machine settings UI.
 import assert from 'node:assert/strict'
-import {readFile} from 'node:fs/promises'
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
+import os from 'node:os'
+import {join} from 'node:path'
 import {test} from 'node:test'
+
+import {createMachines} from '../omarchyd/machines.mjs'
+import {RpcError} from '../omarchyd/rpc.mjs'
+
+async function makeEnv(t, {machines = [], run, kvm = false, files = null} = {}) {
+	const root = await mkdtemp(join(os.tmpdir(), 'omarchyd-rel-'))
+	t.after(() => rm(root, {recursive: true, force: true}))
+	const dataDir = join(root, 'data')
+	const catalog = join(root, 'catalog.json')
+	await writeFile(
+		catalog,
+		JSON.stringify({
+			version: 1,
+			images: [{id: 'testos-amd64', familyId: 'debian', name: 'TestOS', version: '1', arch: 'amd64', kind: 'cloud', url: 'https://example.test/os.qcow2', sha256: 'a'.repeat(64), sizeMb: 1, adminGroup: 'sudo'}],
+		}),
+	)
+	const kvmDevice = join(root, 'kvm')
+	if (kvm) await writeFile(kvmDevice, '')
+	await mkdir(join(dataDir, 'machines', 'vms'), {recursive: true})
+	if (machines.length) {
+		await writeFile(join(dataDir, 'machines', 'machines.json'), JSON.stringify({machines}, null, 2))
+	}
+	const open = (overrides = {}) =>
+		createMachines({
+			dataDir,
+			catalogUrl: `file://${catalog}`,
+			fetchImpl: async () => {
+				throw new Error('no network in test')
+			},
+			run: overrides.run ?? run ?? (async () => ''),
+			kvmDevice,
+			files: overrides.files ?? files,
+			statsIntervalMs: 60_000,
+			watchIdleMs: 1,
+		})
+	return {root, dataDir, kvmDevice, open}
+}
+
+function makeMachineRecord(dataDir, overrides = {}) {
+	const id = overrides.id ?? 'a1b2c3d4'
+	const dir = join(dataDir, 'machines', 'vms', id)
+	return {
+		id,
+		vmid: 100,
+		name: 'Box',
+		osId: 'testos-amd64',
+		sockets: 1,
+		cores: 2,
+		cpuType: 'host',
+		memoryMb: 1024,
+		memoryGb: 1,
+		diskSizeGb: 20,
+		mac: '52:54:00:11:22:33',
+		portForwards: [],
+		createdAt: 1760000000000,
+		boot: ['disk0'],
+		options: {},
+		cloudInit: {username: 'chris', hostname: 'box', sshKeys: []},
+		layout: {
+			firmware: 'bios',
+			machineType: 'q35',
+			nic: 'virtio',
+			video: 'vga',
+			disks: [
+				{id: 'disk0', file: join(dir, 'disk.qcow2'), device: 'disk', bus: 'virtio', format: 'qcow2', sizeGb: 20},
+				{id: 'seed', role: 'seed', file: join(dir, 'seed.iso'), device: 'cdrom', bus: 'sata', format: 'raw'},
+			],
+		},
+		...overrides,
+	}
+}
 
 test('#201: port forwarding tracks ports across all machines and resets form only on success', async () => {
 	const {PORT_MAX, PORT_MIN, nextFreePort, takenPorts} = await import('../web/src/machines/portForwardingState.ts')
@@ -38,4 +111,55 @@ test('#208: flipping an Options switch leaves open Name and Start order editors 
 	assert.match(block, /set\([^\n]*'Renamed'/)
 	assert.match(block, /set\([^\n]*'Start order saved'/)
 })
+
+test('#315: deleteSnapshot propagates qemu-img failures and only ignores missing snapshot errors', async (t) => {
+	const id = 'a1b2c3d4'
+	let disk1Fail = true
+	let disk0Missing = false
+	const env = await makeEnv(t, {
+		run: async (cmd, args) => {
+			if (cmd === 'virsh' && args.includes('list')) return ' Id   Name   State\n------------------\n'
+			if (cmd === 'qemu-img' && args[0] === 'snapshot' && args[1] === '-d') {
+				const file = args[3]
+				if (file.endsWith('disk.qcow2') && disk0Missing) {
+					throw new Error("qemu-img snapshot: Could not delete snapshot 'two': (Can't find the snapshot)")
+				}
+				if (file.endsWith('disk1.qcow2') && disk1Fail) {
+					throw new Error('qemu-img snapshot: Could not open disk1.qcow2: Permission denied')
+				}
+				return ''
+			}
+			return ''
+		},
+	})
+	const dir = join(env.dataDir, 'machines', 'vms', id)
+	await mkdir(dir, {recursive: true})
+	await writeFile(join(dir, 'disk.qcow2'), 'd0')
+	await writeFile(join(dir, 'disk1.qcow2'), 'd1')
+	const rec = makeMachineRecord(env.dataDir, {
+		id,
+		snapshots: [{name: 'two', description: '', createdAt: 1, config: {sockets: 1, cores: 2, memoryMb: 1024, cpuType: 'host', layout: {firmware: 'bios', machineType: 'q35', video: 'vga', nic: 'virtio'}, disks: ['disk0', 'disk1']}}],
+	})
+	rec.layout.disks.push({id: 'disk1', file: join(dir, 'disk1.qcow2'), device: 'disk', bus: 'virtio', format: 'qcow2', sizeGb: 10})
+	await writeFile(join(env.dataDir, 'machines', 'machines.json'), JSON.stringify({machines: [rec]}))
+
+	const m = env.open()
+	await m.ready
+
+	await assert.rejects(() => m.procedures['machines.deleteSnapshot'].run({id, name: 'two'}), /Permission denied/)
+	const afterFail = await m.procedures['machines.details'].run({id})
+	assert.equal(afterFail.snapshots.length, 1)
+	assert.equal(afterFail.snapshots[0].name, 'two')
+	assert.equal(afterFail.tasks[0].type, 'delete-snapshot')
+	assert.equal(afterFail.tasks[0].status, 'error')
+
+	disk0Missing = true
+	disk1Fail = false
+	assert.equal(await m.procedures['machines.deleteSnapshot'].run({id, name: 'two'}), true)
+	const afterRetry = await m.procedures['machines.details'].run({id})
+	assert.deepEqual(afterRetry.snapshots, [])
+	assert.equal(afterRetry.tasks[0].type, 'delete-snapshot')
+	assert.equal(afterRetry.tasks[0].status, 'ok')
+})
+
 
