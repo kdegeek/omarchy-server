@@ -305,3 +305,47 @@ test('readXlsx and cleanNum keep plain and small numbers exact without float noi
 	assert.equal(cleanNum('-0'), '0')
 	assert.equal(cleanNum('1e-20'), '1e-20')
 })
+
+test('readXlsx preserves seconds and renders mm:ss as minutes and seconds', async () => {
+	const buf = await makeXlsx({
+		stylesXml:
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+			'<numFmts count="4">' +
+			'<numFmt numFmtId="164" formatCode="h:mm:ss"/>' +
+			'<numFmt numFmtId="165" formatCode="yyyy-mm-dd hh:mm:ss"/>' +
+			'<numFmt numFmtId="166" formatCode="mm:ss"/>' +
+			'<numFmt numFmtId="167" formatCode="h:mm AM/PM"/>' +
+			'</numFmts>' +
+			'<cellXfs count="8">' +
+			'<xf numFmtId="164"/>' +
+			'<xf numFmtId="165"/>' +
+			'<xf numFmtId="166"/>' +
+			'<xf numFmtId="19"/>' +
+			'<xf numFmtId="21"/>' +
+			'<xf numFmtId="45"/>' +
+			'<xf numFmtId="47"/>' +
+			'<xf numFmtId="167"/>' +
+			'</cellXfs>' +
+			'</styleSheet>',
+		sheetXml:
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+			'<row r="1">' +
+			'<c r="A1" s="0"><v>0.99999</v></c>' +
+			'<c r="B1" s="1"><v>45000.99999</v></c>' +
+			'<c r="C1" s="2"><v>0.0034722</v></c>' +
+			'<c r="D1" s="3"><v>0.99999</v></c>' +
+			'<c r="E1" s="4"><v>0.99999</v></c>' +
+			'<c r="F1" s="5"><v>0.99999</v></c>' +
+			'<c r="G1" s="6"><v>0.99999</v></c>' +
+			'<c r="H1" s="5"><v>0.0034722</v></c>' +
+			'<c r="I1" s="6"><v>0.0034722</v></c>' +
+			'<c r="J1" s="7"><v>0.5</v></c>' +
+			'</row></sheetData></worksheet>',
+	})
+	const sheets = await readXlsx(buf)
+	assert.deepEqual(sheets[0].rows, [
+		['23:59:59', '2023-03-15 23:59:59', '05:00', '23:59:59', '23:59:59', '59:59', '59:59', '05:00', '05:00', '12:00'],
+	])
+})

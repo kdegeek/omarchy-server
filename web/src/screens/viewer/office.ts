@@ -52,9 +52,33 @@ const colIndex = (ref: string) => {
   for (const ch of ref.replace(/\d+/g, "")) n = n * 26 + (ch.charCodeAt(0) - 64);
   return n - 1;
 };
-const DATE_IDS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47]);
-const DATETIME_IDS = new Set([18, 19, 20, 21, 22, 45, 47]);
-export type ExcelFormatKind = "date" | "datetime" | "dur-hm" | "dur-hms" | "dur-ms" | "dur-m" | "dur-s";
+export type ExcelFormatKind =
+  | "date"
+  | "datetime"
+  | "datetime-sec"
+  | "time-hm"
+  | "time-hms"
+  | "time-ms"
+  | "dur-hm"
+  | "dur-hms"
+  | "dur-ms"
+  | "dur-m"
+  | "dur-s";
+
+const BUILTIN_FORMATS: Record<number, ExcelFormatKind> = {
+  14: "date",
+  15: "date",
+  16: "date",
+  17: "date",
+  18: "time-hm",
+  19: "time-hms",
+  20: "time-hm",
+  21: "time-hms",
+  22: "datetime",
+  45: "time-ms",
+  46: "dur-hms",
+  47: "time-ms",
+};
 
 function firstFormatSection(raw: string): string {
   let inQuotes = false;
@@ -85,16 +109,23 @@ function stripFormatLiterals(section: string): string {
 export function classifyExcelFormat(numFmtId: number, formatCode?: string): ExcelFormatKind | null {
   if (formatCode !== undefined) {
     const noLit = stripFormatLiterals(firstFormatSection(formatCode));
-    const code = noLit.replace(/\[[^\]]*\]/g, "");
-    if (/\[h+\]/i.test(noLit)) return /s/i.test(code) ? "dur-hms" : "dur-hm";
-    if (/\[m+\]/i.test(noLit)) return /s/i.test(code) ? "dur-ms" : "dur-m";
+    const stripped = noLit.replace(/\[[^\]]*\]/g, "");
+    if (/\[h+\]/i.test(noLit)) return /s/i.test(stripped) ? "dur-hms" : "dur-hm";
+    if (/\[m+\]/i.test(noLit)) return /s/i.test(stripped) ? "dur-ms" : "dur-m";
     if (/\[s+\]/i.test(noLit)) return "dur-s";
-    const isDate = /[dmy]/i.test(code) && !/^[#0.,%\s]*$/.test(code);
-    return isDate ? (/[hs]/i.test(code) ? "datetime" : "date") : null;
+    const code = stripped.replace(/am\/pm|a\/p/gi, "");
+    const hasDate = /[dy]/i.test(code);
+    const hasHour = /h/i.test(code);
+    const hasSec = /s/i.test(code);
+    const hasM = /m/i.test(code);
+    if (!hasDate && !hasHour && !hasSec && !hasM) return null;
+    if (hasDate) return hasSec ? "datetime-sec" : hasHour ? "datetime" : "date";
+    if (hasHour && hasSec) return "time-hms";
+    if (hasHour) return "time-hm";
+    if (hasSec) return "time-ms";
+    return "date";
   }
-  if (numFmtId === 46) return "dur-hms";
-  if (!DATE_IDS.has(numFmtId)) return null;
-  return DATETIME_IDS.has(numFmtId) ? "datetime" : "date";
+  return BUILTIN_FORMATS[numFmtId] ?? null;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -113,8 +144,12 @@ export function formatExcelSerial(serial: number, kind: ExcelFormatKind, date190
     const s = totalSec % 60;
     return kind === "dur-hms" ? `${sign}${h}:${pad2(m)}:${pad2(s)}` : `${sign}${h}:${pad2(m)}`;
   }
-  const epoch = date1904 ? 24107 : 25569;
   const totalSec = Math.round(serial * 86400);
+  if (kind === "time-ms") {
+    const secOfHour = ((totalSec % 3600) + 3600) % 3600;
+    return `${pad2(Math.floor(secOfHour / 60))}:${pad2(secOfHour % 60)}`;
+  }
+  const epoch = date1904 ? 24107 : 25569;
   const daySerial = kind === "date" ? Math.floor(serial) : Math.floor(totalSec / 86400);
   let day: string;
   if (!date1904 && daySerial === 60) {
@@ -129,7 +164,8 @@ export function formatExcelSerial(serial: number, kind: ExcelFormatKind, date190
   const secOfDay = ((totalSec % 86400) + 86400) % 86400;
   const hh = pad2(Math.floor(secOfDay / 3600));
   const mm = pad2(Math.floor((secOfDay % 3600) / 60));
-  const time = `${hh}:${mm}`;
+  const ss = pad2(secOfDay % 60);
+  const time = kind === "time-hms" || kind === "datetime-sec" ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
   return serial >= 0 && serial < 1 ? time : `${day} ${time}`;
 }
 export const cleanNum = (v: string) => {
