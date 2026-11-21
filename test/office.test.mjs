@@ -349,3 +349,36 @@ test('readXlsx preserves seconds and renders mm:ss as minutes and seconds', asyn
 		['23:59:59', '2023-03-15 23:59:59', '05:00', '23:59:59', '23:59:59', '59:59', '59:59', '05:00', '05:00', '12:00'],
 	])
 })
+
+test('readXlsx formats built-in East Asian date and time numFmtIds 27-36 and 50-58', async () => {
+	const ids = [14, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 50, 51, 52, 53, 54, 55, 56, 57, 58]
+	const timeHmIds = new Set([32, 34, 55])
+	const timeHmsIds = new Set([33, 35, 56])
+	const xfs = ids.map((id) => `<xf numFmtId="${id}"/>`).join('')
+	const cells45000 = ids.map((_, idx) => `<c s="${idx}"><v>45000</v></c>`).join('')
+	const timeIdx = ids.flatMap((id, idx) => (timeHmIds.has(id) || timeHmsIds.has(id) ? [[id, idx]] : []))
+	const cellsHalf = timeIdx.map(([, idx]) => `<c s="${idx}"><v>0.5</v></c>`).join('')
+
+	const buf = await makeXlsx({
+		stylesXml:
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+			`<cellXfs count="${ids.length}">${xfs}</cellXfs>` +
+			'</styleSheet>',
+		sheetXml:
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+			`<row r="1">${cells45000}</row>` +
+			`<row r="2">${cellsHalf}</row>` +
+			'</sheetData></worksheet>',
+	})
+	const sheets = await readXlsx(buf)
+	assert.deepEqual(
+		sheets[0].rows[0],
+		ids.map((id) => (timeHmsIds.has(id) ? '2023-03-15 00:00:00' : timeHmIds.has(id) ? '2023-03-15 00:00' : '2023-03-15')),
+	)
+	assert.deepEqual(
+		sheets[0].rows[1],
+		timeIdx.map(([id]) => (timeHmsIds.has(id) ? '12:00:00' : '12:00')),
+	)
+})
