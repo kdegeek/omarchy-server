@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { mutate, type FileEntry } from "../../api";
 import { Icon, type IconName } from "../../icons";
 import { bytes, haptic, usePortalRoot, useToast } from "../../ui";
+import { handleDocumentLinkClick, renderMarkdownHtml } from "./helpers";
 import type { Sheet, Shape, ZipEntry } from "./office";
 
 const enc = encodeURIComponent;
@@ -612,8 +613,8 @@ function useText(f: FileEntry, reload: number) {
   return state;
 }
 async function renderMarkdown(src: string) {
-  const [{ marked }, { default: DOMPurify }] = await Promise.all([import("marked"), import("dompurify")]);
-  const html = await marked.parse(src, { gfm: true, breaks: false });
+  const [{ Marked }, { default: DOMPurify }] = await Promise.all([import("marked"), import("dompurify")]);
+  const html = await renderMarkdownHtml(src, Marked);
   return DOMPurify.sanitize(html, { FORBID_TAGS: ["style", "form", "input"], USE_PROFILES: { html: true } });
 }
 function TextView(b: BodyProps) {
@@ -713,13 +714,7 @@ function TextView(b: BodyProps) {
         <article
           className="fv-md"
           dangerouslySetInnerHTML={{ __html: html }}
-          onClick={(e) => {
-            const a = (e.target as HTMLElement).closest("a");
-            if (a?.href) {
-              e.preventDefault();
-              if (/^https?:/.test(a.href)) window.open(a.href, "_blank", "noopener,noreferrer");
-            }
-          }}
+          onClick={(e) => void handleDocumentLinkClick(e)}
         />
       </div>
     );
