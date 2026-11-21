@@ -25,6 +25,7 @@ import {isSuper, resolveHyprKey, type Action} from './hyprland/keymap'
 import {Launcher} from './hyprland/Launcher'
 import {GAP, collapse, contains, firstLeaf, flipSplit, focusDir, insert as insertTile, isNode, reconcile, rects as tileRectsOf, remove as removeTile, swapDir, type Node} from './hyprland/layout'
 import {Onboarding} from './hyprland/Onboarding'
+import {desktopIconKeyAction, shouldClearDesktopSelection} from './desktopIcons'
 
 const HINT_KEY = 'omarchy-server:desk-hint-closed'
 
@@ -1423,26 +1424,38 @@ function DesktopIcons(p: {
 	const o = gridOrigin()
 	const posOf = (i: DeskIcon) => ({x: o.x + i.col * CELL_W, y: o.y + i.row * CELL_H})
 
-	// Keyboard on the desktop itself (nothing else focused): open, remove, select all.
+	// Keyboard on the desktop itself (only when .desk-surface has focus): open, remove, select all.
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			const ae = document.activeElement
-			if (ae && ae !== document.body && !ae.closest('.desk-surface')) return
-			if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
+			const act = desktopIconKeyAction(e, document.activeElement, sel)
+			if (!act) return
+			if (act.type === 'select-all') {
 				e.preventDefault()
 				setSel(new Set(icons.map((i) => i.key)))
-				return
-			}
-			if (!sel.size) return
-			if (e.key === 'Enter') sel.forEach((k) => p.onOpen(k))
-			else if (e.key === 'Delete' || e.key === 'Backspace') {
-				p.setCfg((c) => ({...c, icons: c.icons.filter((i) => !sel.has(i.key))}))
+			} else if (act.type === 'open') {
+				act.keys.forEach((k) => p.onOpen(k))
+			} else if (act.type === 'remove') {
+				const drop = new Set(act.keys)
+				p.setCfg((c) => ({...c, icons: c.icons.filter((i) => !drop.has(i.key))}))
 				setSel(new Set())
 			}
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
 	})
+
+	// Drop icon selection whenever pointer or focus moves into a window, dock, top bar, or overview.
+	useEffect(() => {
+		const clear = (e: Event) => {
+			if (shouldClearDesktopSelection(e.target as Element | null)) setSel((s) => (s.size ? new Set() : s))
+		}
+		document.addEventListener('pointerdown', clear, true)
+		document.addEventListener('focusin', clear, true)
+		return () => {
+			document.removeEventListener('pointerdown', clear, true)
+			document.removeEventListener('focusin', clear, true)
+		}
+	}, [])
 
 	// Drag on the empty desktop to select icons with a rubber band.
 	const startBand = (e: React.PointerEvent) => {
