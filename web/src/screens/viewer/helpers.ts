@@ -129,3 +129,10 @@ export function handleDocumentLinkClick(
   }
   return action;
 }
+
+export const ZIP_ENTRY_LIMIT = 5000;
+
+export function zipTruncatedNote(totalEntries: number): string | null {
+  if (totalEntries <= ZIP_ENTRY_LIMIT) return null;
+  return `Showing the first ${ZIP_ENTRY_LIMIT.toLocaleString()} of ${totalEntries.toLocaleString()} entries.`;
+}

@@ -6,10 +6,12 @@ import mammoth from 'mammoth'
 import {Marked} from 'marked'
 
 import {
+	ZIP_ENTRY_LIMIT,
 	classifyLinkHref,
 	handleDocumentLinkClick,
 	headingSlug,
 	renderMarkdownHtml,
+	zipTruncatedNote,
 } from '../web/src/screens/viewer/helpers.ts'
 
 test('headingSlug generates GitHub-style slugs and deduplicates repeats', () => {
@@ -218,4 +220,15 @@ test('DocxView handles mammoth internal bookmark links and external links safely
 
 	const src = await readFile(new URL('../web/src/screens/viewer/FileViewer.tsx', import.meta.url), 'utf8')
 	assert.match(src, /fv-paper[\s\S]{0,160}handleDocumentLinkClick/)
+})
+
+test('ZipView shows a note when a zip archive has more than 5,000 entries', async () => {
+	assert.equal(ZIP_ENTRY_LIMIT, 5000)
+	assert.equal(zipTruncatedNote(0), null)
+	assert.equal(zipTruncatedNote(5000), null)
+	assert.equal(zipTruncatedNote(6000), 'Showing the first 5,000 of 6,000 entries.')
+
+	const src = await readFile(new URL('../web/src/screens/viewer/FileViewer.tsx', import.meta.url), 'utf8')
+	assert.match(src, /entries\.slice\(0,\s*ZIP_ENTRY_LIMIT\)/)
+	assert.match(src, /fv-note[\s\S]{0,80}zipTruncatedNote/)
 })

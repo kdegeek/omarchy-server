@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { mutate, type FileEntry } from "../../api";
 import { Icon, type IconName } from "../../icons";
 import { bytes, haptic, usePortalRoot, useToast } from "../../ui";
-import { handleDocumentLinkClick, renderMarkdownHtml } from "./helpers";
+import { ZIP_ENTRY_LIMIT, handleDocumentLinkClick, renderMarkdownHtml, zipTruncatedNote } from "./helpers";
 import type { Sheet, Shape, ZipEntry } from "./office";
 
 const enc = encodeURIComponent;
@@ -1071,7 +1071,7 @@ function ZipView(b: BodyProps) {
       <div className="fv-zip">
         <p className="muted">{files.length.toLocaleString()} {files.length === 1 ? "file" : "files"} · {bytes(total)} uncompressed</p>
         <ul className="glass">
-          {entries.slice(0, 5000).map((e) => {
+          {entries.slice(0, ZIP_ENTRY_LIMIT).map((e) => {
             const depth = e.name.replace(/\/$/, "").split("/").length - 1;
             const name = e.name.replace(/\/$/, "").split("/").pop();
             return (
@@ -1083,6 +1083,7 @@ function ZipView(b: BodyProps) {
             );
           })}
         </ul>
+        {entries.length > ZIP_ENTRY_LIMIT && <p className="fv-note">{zipTruncatedNote(entries.length)}</p>}
       </div>
     </div>
   );
