@@ -79,4 +79,9 @@ export function favoritePath(item: FavoriteItem): string {
 	return typeof item === 'string' ? item : item.path
 }
 
+/** Activate a file row only when Enter is pressed directly on the row, not a child action button. */
+export function shouldActivateRowOnKey(e: {key: string; target: unknown; currentTarget: unknown}): boolean {
+	return e.key === 'Enter' && e.target === e.currentTarget
+}
+
 export type {FileEntry}

@@ -27,7 +27,7 @@ import { Card, CardHead, Sheet, SheetHeader, bytes, haptic, scrollPhoneToTop, us
 import { SearchField } from "./Apps";
 import { useDesktop } from "../desktop/Desktop";
 import { openTerminalWith } from "../terminalEvent";
-import { batchToastMessage, canSubmitNamePrompt, type FavoriteItem, favoritePath, nextSearchSelection, runFileBatch } from "../filesHelpers";
+import { batchToastMessage, canSubmitNamePrompt, type FavoriteItem, favoritePath, nextSearchSelection, runFileBatch, shouldActivateRowOnKey } from "../filesHelpers";
 
 const FileViewer = lazy(() =>
   import("./viewer/FileViewer").then((m) => ({ default: m.FileViewer })),
@@ -741,7 +741,7 @@ export function Files({ initialPath }: { initialPath?: string } = {}) {
         role="button"
         tabIndex={0}
         onClick={() => activate(f)}
-        onKeyDown={(e) => e.key === "Enter" && activate(f)}
+        onKeyDown={(e) => shouldActivateRowOnKey(e) && activate(f)}
         {...press}
       >
         {selecting && (

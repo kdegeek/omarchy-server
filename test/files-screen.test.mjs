@@ -169,3 +169,19 @@ describe('files screen: #113 favorites preserve FileEntry metadata', () => {
 		assert.match(src, /typeof p === "string" \? \{/)
 	})
 })
+
+describe('files screen: #189 Enter key on row action buttons', () => {
+	test('shouldActivateRowOnKey only activates when Enter originates on the row itself', () => {
+		const row = {}
+		const childBtn = {}
+		assert.equal(helpers.shouldActivateRowOnKey({key: 'Enter', target: row, currentTarget: row}), true)
+		assert.equal(helpers.shouldActivateRowOnKey({key: 'Enter', target: childBtn, currentTarget: row}), false)
+		assert.equal(helpers.shouldActivateRowOnKey({key: ' ', target: row, currentTarget: row}), false)
+		assert.equal(helpers.shouldActivateRowOnKey({key: 'Escape', target: row, currentTarget: row}), false)
+	})
+
+	test('Files.tsx guards row onKeyDown with shouldActivateRowOnKey', async () => {
+		const src = await filesSource()
+		assert.match(src, /onKeyDown=\{\(e\) => shouldActivateRowOnKey\(e\) && activate\(f\)\}/)
+	})
+})
